@@ -20,10 +20,11 @@ custom_model_max_tokens = 1048576
 # 10m20s with finish_reason "length" and an empty body, so the review always
 # fell through to the fallback model. A review comment needs far less than this.
 max_output_tokens = 8000
-# Reasoning was the cause of the overrun: the model reasons by default and spent
-# the entire completion budget before writing anything, so the response came
-# back empty with finish_reason "length".
-reasoning_effort = "low"
+# Reasoning is the cause of the overrun: the model reasons by default and spends
+# the entire completion budget before writing anything, so the response comes
+# back empty with finish_reason "length". "low" still used up the whole 8000
+# tokens, so reasoning is turned off for reviews altogether.
+reasoning_effort = "none"
 # reasoning_effort alone does nothing here. PR-Agent only forwards it after
 # litellm confirms the model is reasoning-capable, and litellm has no entry for
 # this OpenRouter alias, so no reasoning object was ever sent and the model kept
