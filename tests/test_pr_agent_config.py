@@ -119,6 +119,26 @@ class WorkflowTest(unittest.TestCase):
     def test_fork_pull_requests_are_skipped(self):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", self.text)
 
+    def test_synchronize_is_a_configured_action(self):
+        """A push must re-review; the fix loop waits for exactly that.
+
+        PR-Agent's default ``pr_actions`` is [opened, reopened,
+        ready_for_review, review_requested]. A run triggered by a push logged
+        "Skipping action: synchronize" and exited green having done nothing.
+        """
+        self.assertIn("github_action_config.pr_actions:", self.text)
+        self.assertIn('"synchronize"', self.text)
+
+    def test_structured_output_is_requested(self):
+        """Without the file sink the render step has nothing to read.
+
+        These are host-only settings, so they must be here rather than in
+        .pr_agent.toml.
+        """
+        self.assertIn("PUSH_OUTPUTS__ENABLE: \"true\"", self.text)
+        self.assertIn('PUSH_OUTPUTS__CHANNELS: \'["file"]\'', self.text)
+        self.assertIn("PUSH_OUTPUTS__FILE_PATH:", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

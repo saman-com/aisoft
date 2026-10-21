@@ -45,6 +45,11 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
+          # PR-Agent's default pr_actions is [opened, reopened, ready_for_review,
+          # review_requested]. Without "synchronize" it logs "Skipping action:
+          # synchronize" and never re-reviews after a push - which is the event
+          # the whole fix loop depends on.
+          github_action_config.pr_actions: '["opened", "reopened", "synchronize", "ready_for_review"]'
           # PR-Agent otherwise reads .pr_agent.toml from the default branch, so a
           # PR that changes the reviewer's config cannot be tested until it is
           # merged - which makes the review model itself unchangeable by review.
