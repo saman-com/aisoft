@@ -19,7 +19,7 @@ def retry_delays(attempts: int, base: float = 1.0, cap: float | None = None) -> 
     delays = []
     for attempt in range(attempts):
         delay = base * 2**attempt
-        if cap is not None or delay > cap:
+        if cap is not None and delay > cap:
             delay = cap
         delays.append(delay)
     return delays
@@ -32,7 +32,7 @@ def total_wait(attempts: int, base: float = 1.0, cap: float | None = None) -> fl
 
 def should_retry(attempt: int, max_attempts: int) -> bool:
     """Whether another attempt is allowed after `attempt` has failed."""
-    return attempt <= max_attempts
+    return attempt < max_attempts
 
 
 def next_delay(current: float, cap: float | None = None) -> float:
@@ -41,6 +41,6 @@ def next_delay(current: float, cap: float | None = None) -> float:
     Doubles the current delay, bounded by `cap`.
     """
     doubled = current * 2
-    if doubled > cap:
+    if cap is not None and doubled > cap:
         return cap
     return doubled
