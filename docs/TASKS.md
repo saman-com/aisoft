@@ -169,7 +169,39 @@
   _Not a loop. Printing the status for one review is this ticket; running the
   attempts is T4.5, which calls `report()` rather than printing its own verdict._
 
-- [ ] **T4.5** Full loop integration test on at least two PRs
+- [x] **T4.5** Full loop integration test on at least two PRs
+  `scripts/driver_loop.py` is the loop entry point: it calls `run_cycle` once per
+  attempt, stops on `SUCCESS`/`HUMAN`/`REPEATED`, advances the iteration only when
+  the outcome is `CONTINUE`, and prints the final verdict once through
+  `report()`. `MAX_ITERATIONS` and `check_iteration` gate both the start value and
+  every step, so no path can reach attempt 6. The wait between attempts is the
+  cycle's own content-based wait: a review only counts when its comment id is
+  newer than the one just handled, never on elapsed time.
+
+  A cycle that raises `NothingToPush` is turned into `LoopError` (exit 1), not
+  exit 2. Pi ran, produced no diff, and a person has to look at it; filing that
+  with “no PR yet” would invite a rerun that does the same thing again.
+
+  Two live PRs, both started at a score below 5:
+
+  - PR #33 (run D): 3/5 with three findings, Pi fixed all three in one attempt,
+    the review came back 4/5 with no issues, loop stopped on `SUCCESS` after
+    attempt 1 (`iteration 1/5: 3/5 -> 4/5`, exit 0). The three fixes were checked
+    against the code, not just the score: `retry_delays(4)` now returns
+    `[1.0, 2.0, 4.0, 8.0]`, `cap=5.0` clamps the tail to `5.0`, `total_wait`
+    with no cap returns `15.0`, and `should_retry(3, 3)` is `False`.
+  - PR #34 (run E): already 5/5 on the first review, so the loop stopped
+    immediately without calling Pi and without spending an attempt
+    (`iteration 1/5: 5/5 -> 5/5 (unchanged)`, exit 0).
+
+  The live runs also found a defect the tests could not: Pi's `bash` tool ran
+  `git commit` and `git push` itself (PR #31 `a573f9d`, PR #32 `73709ba`), so the
+  branch moved behind the driver's back and its own push then had nothing to do.
+  `--exclude-tools bash` did not close it, because Pi reached a shell through its
+  `subagent` tool; `scripts/driver_pi.py` now passes an explicit `--tools`
+  allowlist of `read,edit,write,grep,find,ls`. Runs D and E are the evidence that
+  Pi then edited without pushing: both commits were made and pushed by the driver,
+  with the `fix: address PR-Agent feedback (iteration N)` message it builds.
 
 **Slice 4 complete when:** The loop can take a PR from <5 to either 5/5 or the iteration limit without human intervention (except final merge).
 

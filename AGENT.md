@@ -65,7 +65,8 @@ Do not open a PR until every issue in the slice is closed. Branch
 The driver calls Pi like this (`scripts/driver_pi.py`):
 
 ```bash
-pi --print --no-session --approve [extra args] < prompt.md
+pi --print --no-session --approve --tools read,edit,write,grep,find,ls \
+    [extra args] < prompt.md
 ```
 
 | Flag | Why it is there |
@@ -73,6 +74,19 @@ pi --print --no-session --approve [extra args] < prompt.md
 | `--print` | One-shot: process the prompt, write the final text to stdout, exit. |
 | `--no-session` | Each iteration starts from the repository, not from a previous iteration's session. |
 | `--approve` | Print mode cannot show the trust prompt, so an unapproved run silently skips project resources. |
+| `--tools` | The allowlist. Pi edits files and nothing else, so the commit and the push stay with the driver. |
+
+**Pi does not get a shell.** On the live runs for PR #31 and PR #32, Pi's `bash`
+tool ran `git commit` and `git push` itself. The branch moved and got reviewed
+while the driver's own push then found nothing left to do, so a successful
+attempt was reported as a stall and every push guard was skipped. Excluding the
+single name is not enough: with `--exclude-tools bash`, Pi reached a shell
+through its `subagent` tool and the child process ran the command. Only an
+explicit allowlist closes it.
+
+The cost is real and accepted: Pi cannot run the test suite to check its own
+work. Verifying the suite belongs to the repo's checks, not to the model that
+wrote the change.
 
 **The prompt goes on stdin, never in argv.** It is model-written text containing
 backticks, quotes, `$` and pipes: a shell would interpret it, and a command line
@@ -112,19 +126,23 @@ is absent and that the workflow `env:` values match the TOML.
 ### The push is explicit, verified, and never forced
 
 `scripts/driver_git.py` owns every write the loop makes to git. It refuses the
-default branch, refuses a branch that changed mid-run (Pi has a shell and can run
-`git checkout`), pushes an explicit refspec with no force flag, and reads
-`refs/remotes/origin/<branch>` back afterwards instead of trusting the exit status.
+default branch, refuses a branch that changed mid-run, pushes an explicit refspec
+with no force flag, and reads `refs/remotes/origin/<branch>` back afterwards
+instead of trusting the exit status. The mid-run check is not paranoia: before the
+allowlist, Pi could run `git checkout` and `git push` through its shell, and doing
+so moved a branch the driver believed it still owned.
 
 A push that reports success but did not land would leave the loop waiting for a
 review of a commit that never arrived, so the verification is not optional. A
 force-push is never acceptable here: it rewrites a branch a human may have based
 work on, and a rejected push means the remote moved and a human needs to look.
 
-A clean tree whose head is already on the remote raises `NothingToPush` (exit 2),
-not success. Treating it as success burns an iteration re-triggering a review of
-unchanged code. A failed commit or push raises (exit 1) and names the local commit
-that did not reach the remote.
+A clean tree whose head is already on the remote raises `NothingToPush`, not
+success. Treating it as success burns an iteration re-triggering a review of
+unchanged code. Inside `run_loop` that condition is a `LoopError` (exit 1), not
+the exit 2 the single cycle uses: Pi ran and produced no diff, which is a stall a
+person has to look at, not a "try again later". A failed commit or push raises
+(exit 1) and names the local commit that did not reach the remote.
 
 ### Waiting for a re-review is bounded, and its numbers are fixed here
 
@@ -168,6 +186,30 @@ them separate means changing the stopping rule cannot widen the hard cap.
 
 Exceeding the limit raises `IterationLimit` (a `DriverError`, exit 1): repeating
 the run unchanged will not help, and the message says a human is needed.
+
+### One process runs the attempts, and it only advances on `CONTINUE`
+
+`scripts/driver_loop.py::run_loop` is the entry point that turns one cycle into a
+loop. `run_cycle` still does exactly one attempt; `run_loop` decides whether
+there is another. The rule is one line: `CONTINUE` advances the iteration and
+waits for a newer review, and any other outcome stops and prints the verdict once
+via `report()`.
+
+Three properties matter:
+
+- **The cap is checked at both ends.** `check_iteration` gates the starting
+  iteration and every step, so no combination of arguments reaches attempt 6.
+- **Progress is a new review, not elapsed time.** The wait between attempts is the
+  cycle's own content-based wait: a review counts only when its comment id is
+  newer than the one just handled. A loop that advanced on a timer would re-read
+  the review it just failed to satisfy.
+- **A spent attempt that produced no diff stops the loop.** `NothingToPush`
+  becomes a `LoopError` (exit 1) here, not the exit 2 the single cycle uses. Pi
+  ran, edited nothing, and the next attempt would ask the same model the same
+  question against the same review.
+
+Each attempt is logged as it finishes rather than collected and printed at the
+end, so a run that dies on attempt 3 still says what attempts 1 and 2 scored.
 
 ### The loop stops at 5/5, or at 4/5 with nothing serious left
 
