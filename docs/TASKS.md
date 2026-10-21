@@ -26,7 +26,7 @@
 - [x] **T0.1** Create `.pr_agent.toml` with the exact output contract  
   Force `## Confidence Score`, `## Issues`, `## Agent Prompt` format.
 
-- [ ] **T0.2** Document the parsing contract  
+- [x] **T0.2** Document the parsing contract  
   Create `CONTRACT.md` (or a section in README) that defines how to extract Score / Issues / Agent Prompt.
 
 - [ ] **T0.3** Create empty GitHub Action skeleton  
