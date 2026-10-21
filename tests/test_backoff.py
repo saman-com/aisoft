@@ -15,6 +15,17 @@ class DelaysTest(unittest.TestCase):
     def test_delays_double_from_the_base(self):
         self.assertEqual(retry_delays(4), [1.0, 2.0, 4.0, 8.0])
 
+    def test_no_cap_means_no_ceiling(self):
+        """`cap=None` is "unbounded", not "cap at None".
+
+        The branch started with a bug here: the cap was applied unconditionally,
+        so this returned `[None, None, None, None]` and `total_wait` crashed
+        summing them. The review caught it, and this test is what stops it coming
+        back.
+        """
+        self.assertEqual(retry_delays(4, cap=None), [1.0, 2.0, 4.0, 8.0])
+        self.assertEqual(total_wait(4, cap=None), 15.0)
+
     def test_no_attempts_waits_nothing(self):
         self.assertEqual(retry_delays(0), [])
 
