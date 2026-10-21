@@ -19,7 +19,7 @@ def retry_delays(attempts: int, base: float = 1.0, cap: float | None = None) -> 
     delays = []
     for attempt in range(attempts):
         delay = base * 2**attempt
-        if cap is not None or delay > cap:
+        if cap is not None and delay > cap:
             delay = cap
         delays.append(delay)
     return delays
