@@ -40,6 +40,16 @@ class BuildCommandTest(unittest.TestCase):
         """Print mode cannot show the trust prompt, so the decision is made up front."""
         self.assertIn("--approve", build_command())
 
+    def test_the_edit_tools_are_still_available(self):
+        """Removing `bash` must not remove the ability to do the work.
+
+        `--exclude-tools` only subtracts, so `edit` and `write` stay. Pinning it
+        here stops the exclusion quietly narrowing to a run that cannot fix code.
+        """
+        command = build_command()
+        self.assertNotIn("--tools", command)
+        self.assertNotIn("--no-tools", command)
+
     def test_the_prompt_is_not_on_the_command_line(self):
         """A prompt in argv is visible to every process and limited to ARG_MAX."""
         command = build_command()
@@ -49,6 +59,19 @@ class BuildCommandTest(unittest.TestCase):
     def test_extra_arguments_are_appended(self):
         command = build_command(extra_args=("--model", "openrouter/x"))
         self.assertEqual(command[-2:], ["--model", "openrouter/x"])
+
+    def test_pi_is_not_given_the_bash_tool(self):
+        """Pi must edit and stop there; the driver owns the commit and the push.
+
+        `bash` let Pi run `git commit` and `git push` itself (seen live on PR #31,
+        commit a573f9d), which bypasses every push invariant the driver holds:
+        the explicit non-forced refspec, the branch check, and reading back the
+        commit that landed. Once Pi has pushed, `commit_and_push` finds a clean
+        tree whose HEAD is already on the remote and correctly reports that there
+        was nothing to push, so a successful attempt looks like a stall.
+        """
+        self.assertIn("--exclude-tools", build_command())
+        self.assertIn("bash", build_command())
 
 
 class RunPiTest(unittest.TestCase):
