@@ -55,9 +55,28 @@ def pick_contract_comment(comments: list[dict], author: str) -> int | None:
     return newest
 
 
-def _gh(*args: str) -> str:
-    result = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+def _gh(*args: str, stdin: str | None = None) -> str:
+    result = subprocess.run(
+        ["gh", *args], input=stdin, capture_output=True, text=True, check=True
+    )
     return result.stdout
+
+
+def _write_body(repo: str, pr: int | None, body: str, comment_id: int | None) -> None:
+    """Write `body` through the API's JSON input.
+
+    The body is model-derived text of unbounded length. Sending it as a command
+    line argument risks hitting ARG_MAX, and `gh api -f body=...` turns a value
+    starting with `@` into a file reference. Passing the JSON payload on stdin
+    avoids both: nothing is parsed out of the body and no length limit applies.
+    """
+    payload = json.dumps({"body": body})
+    if comment_id is None:
+        _gh("api", "--method", "POST", f"repos/{repo}/issues/{pr}/comments",
+            "-H", "Content-Type: application/json", "--input", "-", stdin=payload)
+    else:
+        _gh("api", "--method", "PATCH", f"repos/{repo}/issues/comments/{comment_id}",
+            "-H", "Content-Type: application/json", "--input", "-", stdin=payload)
 
 
 def list_comments(repo: str, pr: int) -> list[dict]:
@@ -93,10 +112,9 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
 def post(repo: str, pr: int, body: str, author: str) -> str:
     """Create or update the contract comment; return a line describing what happened."""
     existing = pick_contract_comment(list_comments(repo, pr), author)
+    _write_body(repo, pr, body, existing)
     if existing is None:
-        _gh("api", "--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={body}")
         return f"created a new contract comment on #{pr}"
-    _gh("api", "--method", "PATCH", f"repos/{repo}/issues/comments/{existing}", "-f", f"body={body}")
     return f"updated contract comment {existing} on #{pr}"
 
 

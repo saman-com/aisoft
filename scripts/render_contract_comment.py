@@ -114,18 +114,37 @@ def render_contract_comment(review: dict) -> str:
 
 
 def latest_review(jsonl_path: pathlib.Path) -> dict:
-    """Return the review payload from the last record of a push_outputs JSONL file."""
-    records = [line for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if not records:
-        raise ContractError(f"no review records in {jsonl_path}")
-    try:
-        record = json.loads(records[-1])
-    except json.JSONDecodeError as error:
-        raise ContractError(f"last record in {jsonl_path} is not JSON: {error}") from error
-    payload = record.get("payload")
-    if not isinstance(payload, dict) or not payload:
-        raise ContractError(f"last record in {jsonl_path} carries no review payload")
-    return payload
+    """Return the payload of the last review record in a push_outputs JSONL file.
+
+    The sink appends one record per tool run, and a record carries its tool in
+    `type` (`push_outputs("review", ...)`). Selecting the last line blindly
+    would break as soon as another tool writes to the same file, or read an
+    empty payload from a record that failed before producing one.
+    """
+    lines = [line for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        raise ContractError(f"no records in {jsonl_path}")
+
+    found_review = False
+    for number, line in enumerate(reversed(lines), start=1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ContractError(
+                f"record {len(lines) - number + 1} in {jsonl_path} is not JSON: {error}"
+            ) from error
+        if not isinstance(record, dict):
+            continue
+        if record.get("type") != "review":
+            continue
+        found_review = True
+        payload = record.get("payload")
+        if isinstance(payload, dict) and payload:
+            return payload
+
+    if found_review:
+        raise ContractError(f"the last review record in {jsonl_path} carries no payload")
+    raise ContractError(f"no review record in {jsonl_path}")
 
 
 def main(argv: list[str] | None = None) -> int:
