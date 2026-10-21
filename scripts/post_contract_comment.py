@@ -122,15 +122,13 @@ def list_comments(repo: str, pr: int) -> list[dict]:
 def _split_json_arrays(out: str) -> list[list[dict]]:
     """Parse the JSON arrays `gh api --paginate` concatenates.
 
-    `gh` can print a warning to stdout alongside the payload. Skipping the line
-    it sits on and carrying on keeps the remaining pages, which matters here:
-    dropping a later page could hide an existing contract comment and make this
-    script post a duplicate. A whole-output abort would do the same, so unknown
-    text is skipped rather than fatal.
+    `gh` can print a warning to stdout alongside the payload, so the output is
+    not required to be pure JSON.
 
-    Raises when there was output but no array could be read at all - an empty
-    comment list looks exactly like "nothing posted yet", which is the one wrong
-    answer this function must not give.
+    Anything unreadable raises. Skipping the line would be friendlier, but the
+    skipped text may have been a whole page, and a partial list can hide the
+    existing contract comment, after which this script posts a duplicate.
+    Refusing to post is recoverable; a duplicate comment is not.
     """
     decoder = json.JSONDecoder()
     chunks: list[list[dict]] = []
@@ -154,9 +152,11 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
         if isinstance(value, list):
             chunks.append(value)
 
-    if skipped:
-        print("warning: ignored unparseable lines in the gh api output", file=sys.stderr)
-    if not chunks and out.strip():
+    # Any unreadable line is fatal, not something to skip past. The skipped text
+    # could be one page among several, and a partial list can hide the existing
+    # contract comment - after which this script posts a duplicate. Refusing to
+    # post is recoverable; a duplicate comment is what the loop cannot undo.
+    if skipped or (not chunks and out.strip()):
         raise CommentError("could not parse the comment list from gh api")
     return chunks
 

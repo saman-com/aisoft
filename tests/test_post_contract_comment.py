@@ -108,22 +108,21 @@ class SplitJsonTest(unittest.TestCase):
     def test_page_arrays_are_concatenated(self):
         self.assertEqual(_split_json_arrays('[{"a":1}]\n[{"b":2}]'), [[{"a": 1}], [{"b": 2}]])
 
-    def test_trailing_noise_is_ignored(self):
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            chunks = _split_json_arrays('[{"a":1}]\nwarning: something\n')
-        self.assertEqual(chunks, [[{"a": 1}]])
-        self.assertIn("unparseable", stderr.getvalue())
+    def test_trailing_noise_is_fatal(self):
+        with self.assertRaises(CommentError):
+            _split_json_arrays('[{"a":1}]\nwarning: something\n')
 
     def test_empty_output_is_no_pages(self):
         self.assertEqual(_split_json_arrays(""), [])
 
-    def test_noise_between_pages_keeps_the_later_page(self):
-        """Dropping a page could hide the existing comment and post a duplicate."""
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            chunks = _split_json_arrays('[{"a":1}]\nwarning: x\n[{"b":2}]')
-        self.assertEqual(chunks, [[{"a": 1}], [{"b": 2}]])
+    def test_noise_between_pages_is_fatal(self):
+        """A skipped line could be a whole page, hiding the existing comment.
+
+        A partial list makes pick_contract_comment miss the contract comment and
+        the script posts a duplicate, so refusing to post is the safe direction.
+        """
+        with self.assertRaises(CommentError):
+            _split_json_arrays('[{"a":1}]\nwarning: x\n[{"b":2}]')
 
     def test_output_with_no_arrays_at_all_is_an_error(self):
         """An empty list reads as "nothing posted yet" and would duplicate."""
