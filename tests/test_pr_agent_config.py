@@ -119,6 +119,16 @@ class WorkflowTest(unittest.TestCase):
     def test_fork_pull_requests_are_skipped(self):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", self.text)
 
+    def test_bot_gate_checks_the_pr_author_not_the_event_sender(self):
+        """A bot push must still trigger the re-review.
+
+        Gating on ``github.event.sender.type`` skipped every synchronize run
+        whose pusher was a bot - including the fix loop's own pushes - which
+        silently defeats the synchronize trigger the loop polls for.
+        """
+        self.assertIn("github.event.pull_request.user.type != 'Bot'", self.text)
+        self.assertNotIn("github.event.sender.type != 'Bot'", self.text)
+
     def test_synchronize_is_a_configured_action(self):
         """A push must re-review; the fix loop waits for exactly that.
 

@@ -22,10 +22,14 @@ jobs:
   pr-agent:
     name: PR-Agent review
     runs-on: ubuntu-latest
-    # Never review PRs opened by a bot, and never try to review from forks where
-    # the OpenRouter secret is unavailable.
+    # Skip PRs opened by a bot, and never try to review from forks where the
+    # OpenRouter secret is unavailable.
+    #
+    # The gate is on the PR author, not on the event sender: a synchronize run
+    # caused by the fix loop pushing a commit can have a bot sender, and
+    # skipping those would defeat the synchronize trigger the loop depends on.
     if: >-
-      github.event.sender.type != 'Bot' &&
+      github.event.pull_request.user.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
