@@ -52,7 +52,7 @@
   by `scripts/render_contract_comment.py` from the structured review and posted
   by the workflow — see CONTRACT.md)
 
-- [ ] **T1.4** Manual validation  
+- [x] **T1.4** Manual validation  
   Open a test PR and confirm the comment matches the contract. Attach example output.
 
 **Slice 1 complete when:** A real PR produces a correctly structured review comment.
