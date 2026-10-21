@@ -97,6 +97,10 @@
 - [ ] **T4.1** Add iteration counter and hard limit of 5
 
 - [ ] **T4.2** Implement decision logic (score == 5 → stop, else fix, else give up)
+  Success exit is `score == 5` **or** `score >= 4` with no P0/P1 issues in the
+  Issues section, since the reviewer plateaus at 4/5 while listing only
+  low-confidence findings (see PR #27). Optional follow-up: tighten
+  `extra_instructions` so only confirmed issues affect the score.
 
 - [ ] **T4.3** (Optional) Light repeated-issue detection
 
