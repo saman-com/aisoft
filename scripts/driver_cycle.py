@@ -60,6 +60,7 @@ from driver_comments import (
     wait_for_contract_comment,
 )
 from driver_git import GitError, NothingToPush, PushResult, commit_and_push
+from driver_iteration import check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError, PiRun, run_pi
 from driver_pr import GhFailed, NoPullRequest, PullRequest, resolve
@@ -111,7 +112,13 @@ def run_cycle(
     pi_timeout: float = PI_DEFAULT_TIMEOUT,
     quiet: bool = False,
 ) -> CycleResult:
-    """Run one iteration of the fix loop. Raises rather than returning half a cycle."""
+    """Run one iteration of the fix loop. Raises rather than returning half a cycle.
+
+    The iteration is checked against the hard limit before anything else, so a
+    sixth attempt is refused before Pi runs, before a commit exists and before a
+    push lands. Everything below this line is one permitted attempt.
+    """
+    check_iteration(iteration)
     pull_request = resolve(branch)
     if pr is not None and pull_request.number != pr:
         raise NoPullRequest(
@@ -151,12 +158,14 @@ def run_cycle(
         )
 
     if not quiet:
-        driver_log.log(f"running pi (iteration {iteration}) from the Agent Prompt")
+        driver_log.log(
+            f"running pi ({describe_iteration(iteration)}) from the Agent Prompt"
+        )
     run = run_pi(before.agent_prompt, timeout=pi_timeout)
 
     if run.returncode != 0:
         raise PiError(
-            f"pi exited {run.returncode} on iteration {iteration}. "
+            f"pi exited {run.returncode} on {describe_iteration(iteration)}. "
             f"stderr: {run.stderr.strip() or '(empty)'}"
         )
     if not quiet and run.stdout.strip():
@@ -251,7 +260,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", type=int, default=None, help="must match the PR for this branch")
     parser.add_argument("--branch", default=None, help="defaults to the current branch")
     parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repository")
-    parser.add_argument("--iteration", type=int, default=1)
+    parser.add_argument(
+        "--iteration",
+        type=int,
+        default=1,
+        help="this attempt's number, 1..5; a value outside that range is refused",
+    )
     parser.add_argument("--dry-run", action="store_true", help="read and parse, change nothing")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)

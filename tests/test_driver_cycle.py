@@ -38,6 +38,7 @@ from driver_comments import (  # noqa: E402
 )
 from driver_cycle import CycleResult, NoReview, run_cycle  # noqa: E402
 from driver_git import GitError, NothingToPush, PushResult  # noqa: E402
+from driver_iteration import MAX_ITERATIONS, IterationLimit  # noqa: E402
 from driver_pi import PiError, PiRun  # noqa: E402
 from driver_pr import GhFailed, NoPullRequest, PullRequest  # noqa: E402
 from parse_contract_comment import ParseError, Review  # noqa: E402
@@ -128,14 +129,14 @@ class Fixture:
 
         return wait
 
-    def run(self, **kwargs):
+    def run(self, iteration=1, **kwargs):
         patchers = [
             mock.patch.object(driver_cycle, name, spy) for name, spy in self.spies.items()
         ]
         for patcher in patchers:
             patcher.start()
         try:
-            return run_cycle(repo="owner/repo", iteration=1, **kwargs)
+            return run_cycle(repo="owner/repo", iteration=iteration, **kwargs)
         finally:
             for patcher in reversed(patchers):
                 patcher.stop()
@@ -243,6 +244,39 @@ class EarlyStopTest(unittest.TestCase):
         self.assertTrue(fixture.called("commit_and_push"))
 
 
+class IterationLimitTest(unittest.TestCase):
+    """T4.1: the cap is enforced on the way in, not admitted afterwards."""
+
+    def test_the_sixth_iteration_is_refused_before_anything_happens(self):
+        """No PR read, no Pi run, no commit, no push, no wait.
+
+        Checking after the work would push a sixth fix and only then report that
+        it should not have run. Every collaborator must be untouched.
+        """
+        fixture = Fixture()
+        with self.assertRaises(IterationLimit):
+            fixture.run(iteration=MAX_ITERATIONS + 1)
+        for name in (
+            "resolve",
+            "list_comments",
+            "run_pi",
+            "commit_and_push",
+            "wait_for_contract_comment",
+        ):
+            with self.subTest(collaborator=name):
+                self.assertFalse(fixture.called(name))
+
+    def test_the_last_allowed_iteration_still_runs(self):
+        result = Fixture().run(iteration=MAX_ITERATIONS)
+        self.assertTrue(result.pi_ran)
+
+    def test_the_iteration_label_is_the_one_in_the_log(self):
+        """`iteration N/5` is what an operator sees and what the issue records."""
+        from driver_iteration import describe_iteration  # noqa: PLC0415
+
+        self.assertEqual(describe_iteration(MAX_ITERATIONS), "iteration 5/5")
+
+
 class DryRunTest(unittest.TestCase):
     def test_dry_run_reads_and_parses_but_changes_nothing(self):
         fixture = Fixture()
@@ -285,7 +319,12 @@ class CliTest(unittest.TestCase):
                     self.assertEqual(driver_cycle.main(["--pr", "31"]), 2)
 
     def test_exit_1_when_the_environment_fails(self):
-        for error in (GhFailed("gh down"), PiError("pi down"), GitError("git down")):
+        for error in (
+            GhFailed("gh down"),
+            PiError("pi down"),
+            GitError("git down"),
+            IterationLimit("iteration 6 is past the hard limit of 5"),
+        ):
             with self.subTest(error=type(error).__name__):
                 with mock.patch.object(driver_cycle, "run_cycle", side_effect=error):
                     self.assertEqual(driver_cycle.main(["--pr", "31"]), 1)

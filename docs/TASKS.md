@@ -115,7 +115,11 @@
 ## Slice 4 – Full Loop with Guardrails
 **Exit criteria:** Driver can run up to 5 iterations and stops cleanly on score 5/5 or when the limit is reached.
 
-- [ ] **T4.1** Add iteration counter and hard limit of 5
+- [x] **T4.1** Add iteration counter and hard limit of 5
+  `scripts/driver_iteration.py` holds `MAX_ITERATIONS = 5` in one place, and
+  `check_iteration` refuses attempt 6 (and 0) *before* the PR is read or Pi runs, so
+  a sixth push cannot land. Logs show `iteration N/5`. `driver_cycle.run_cycle`
+  calls it first.
 
 - [ ] **T4.2** Implement decision logic (score == 5 → stop, else fix, else give up)
   Success exit is `score == 5` **or** `score >= 4` with no P0/P1 issues in the

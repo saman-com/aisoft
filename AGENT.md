@@ -150,6 +150,25 @@ the id grows beyond it or its body (or `updated_at`) differs. An id-only baselin
 (`newer_than=`) cannot detect an in-place rewrite and will time out; that limitation
 is documented by its own test. The old comment is never accepted as the new one.
 
+### The iteration limit is five, and it is checked before the work
+
+`scripts/driver_iteration.py` owns the counter. `MAX_ITERATIONS = 5` is defined
+once, imported by the cycle and the CLI, and printed as `iteration N/5` so the
+log says how many attempts are left.
+
+`check_iteration` runs on the way *into* an iteration, before the PR is read,
+before Pi runs, before a commit exists and before anything is pushed. A limit
+checked afterwards would push a sixth fix and then report that it should not have
+run. A message cannot undo a push. Attempt `0` is refused too, because a counter
+that starts at zero quietly buys a sixth attempt.
+
+The guard answers "is another attempt allowed". T4.2 answers a different
+question: "would another attempt help" (score 5, or 4+ with no P0/P1). Keeping
+them separate means changing the stopping rule cannot widen the hard cap.
+
+Exceeding the limit raises `IterationLimit` (a `DriverError`, exit 1): repeating
+the run unchanged will not help, and the message says a human is needed.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table
