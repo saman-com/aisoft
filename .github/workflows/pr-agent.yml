@@ -45,6 +45,14 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
+          # PR-Agent otherwise reads .pr_agent.toml from the default branch, so a
+          # PR that changes the reviewer's config cannot be tested until it is
+          # merged - which makes the review model itself unchangeable by review.
+          # Reading it from the PR head makes config changes testable in the PR
+          # that proposes them. Fork PRs are excluded above, so only people who
+          # can already push to this repository can reach this; PR-Agent still
+          # rejects host-only keys (credentials, endpoints) from repo config.
+          PR_AGENT_CONFIG_BRANCH: ${{ github.event.pull_request.head.ref }}
           # push_outputs is host-only configuration: a repository's
           # .pr_agent.toml cannot enable it, so it is set here, where the
           # workflow counts as the host.

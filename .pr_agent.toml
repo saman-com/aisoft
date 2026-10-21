@@ -7,6 +7,14 @@ model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 # PR-Agent ships a non-OpenRouter fallback (gpt-5.6-terra); pin ours to
 # OpenRouter too so a primary-model hiccup never needs an OpenAI key.
 fallback_models = ["openrouter/deepseek/deepseek-v4.1-flash"]
+# PR-Agent resolves a model's context window from its own MAX_TOKENS table, then
+# from litellm. Neither knows this OpenRouter alias, and without a budget the
+# review fails outright before any model call:
+#   ERROR pr_agent.algo.token_budget:get_max_tokens:161 - Model
+#   openrouter/deepseek/deepseek-v4.1-flash-1017 is not defined in MAX_TOKENS ...
+# 1048576 is the model's real context length; config.max_model_tokens (32000)
+# still caps what PR-Agent actually sends.
+custom_model_max_tokens = 1048576
 # The contract comment is rendered by scripts/render_contract_comment.py and
 # posted by the workflow. PR-Agent still computes the review (that is how the
 # structured output is produced), but its own rendering must not become a

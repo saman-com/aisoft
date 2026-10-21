@@ -77,6 +77,48 @@ class ModelTest(unittest.TestCase):
         for model in fallbacks:
             self.assertTrue(model.startswith("openrouter/"), model)
 
+    def test_custom_model_max_tokens_is_set(self):
+        """PR-Agent must have a token budget for our OpenRouter alias.
+
+        This was a real CI failure, not a hypothetical: ``get_max_tokens``
+        looks the model up in PR-Agent's ``MAX_TOKENS`` table and then in
+        litellm, neither of which knows the alias, and raises before any model
+        call is made. The error text is
+        "Model openrouter/deepseek/deepseek-v4.1-flash-1017 is not defined in
+        MAX_TOKENS in ./pr_agent/algo/__init__.py and no
+        custom_model_max_tokens is set".
+        """
+        value = self.config.get("custom_model_max_tokens")
+        self.assertIsInstance(value, int)
+        self.assertGreater(value, 0)
+
+
+class WorkflowTest(unittest.TestCase):
+    """Guards wiring that only shows up at runtime.
+
+    Read as text: the suite must run on a bare interpreter (tomllib only), and
+    these are plain "is the value passed" assertions, not YAML structure.
+    """
+
+    WORKFLOW_PATH = CONFIG_PATH.parent / ".github" / "workflows" / "pr-agent.yml"
+
+    def setUp(self):
+        self.text = self.WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    def test_openrouter_key_comes_from_the_repository_secret(self):
+        self.assertIn("OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}", self.text)
+
+    def test_github_token_is_passed(self):
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.text)
+
+    def test_config_is_read_from_the_pr_head(self):
+        """Otherwise a PR cannot change .pr_agent.toml: the run would use the
+        default branch's copy and the change would only take effect once merged."""
+        self.assertIn("PR_AGENT_CONFIG_BRANCH: ${{ github.event.pull_request.head.ref }}", self.text)
+
+    def test_fork_pull_requests_are_skipped(self):
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
