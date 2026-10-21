@@ -4,6 +4,9 @@
 [config]
 # Change this to any OpenRouter model you prefer
 model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
+# PR-Agent ships a non-OpenRouter fallback (gpt-5.6-terra); pin ours to
+# OpenRouter too so a primary-model hiccup never needs an OpenAI key.
+fallback_models = ["openrouter/deepseek/deepseek-v4.1-flash"]
 
 [pr_reviewer]
 require_score_review = true

@@ -44,7 +44,7 @@
 
 - [x] **T1.1** Implement real GitHub Action with PR-Agent + OpenRouter
 
-- [ ] **T1.2** Configure model and review flags  
+- [x] **T1.2** Configure model and review flags  
   (`require_score_review`, risk assessment, merge recommendation)
 
 - [ ] **T1.3** Force structured output format via `extra_instructions`
