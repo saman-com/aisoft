@@ -122,13 +122,11 @@ def list_comments(repo: str, pr: int) -> list[dict]:
 def _split_json_arrays(out: str) -> list[list[dict]]:
     """Parse the JSON arrays `gh api --paginate` concatenates.
 
-    `gh` can print a warning to stdout alongside the payload, so the output is
-    not required to be pure JSON.
-
-    Anything unreadable raises. Skipping the line would be friendlier, but the
-    skipped text may have been a whole page, and a partial list can hide the
-    existing contract comment, after which this script posts a duplicate.
-    Refusing to post is recoverable; a duplicate comment is not.
+    `gh` can print a warning to stdout alongside the payload. A warning line is
+    skipped, but if anything was skipped the call still fails: the skipped text
+    may have been a whole page, and a partial list can hide the existing contract
+    comment, after which this script posts a duplicate. Refusing to post is
+    recoverable; a duplicate comment is not.
     """
     decoder = json.JSONDecoder()
     chunks: list[list[dict]] = []
