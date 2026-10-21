@@ -145,13 +145,24 @@ def _format_location(path: str, start_raw: object, end_raw: object) -> str:
     return f"{path}:{start}-{end}"
 
 
+def _issue_parts(issue: dict) -> tuple[str, str, str]:
+    """Pull `(location, header, content)` out of a finding.
+
+    Shared by the Issues section and the derived prompt so the two cannot drift:
+    the same finding must name the same file, lines and text wherever it appears.
+    Text is returned raw - each caller escapes the finished string once, since
+    escaping per field and again per section doubled the backslash.
+    """
+    path = str(issue.get("relevant_file") or "").strip()
+    header = " ".join(str(issue.get("issue_header") or "").split())
+    content = " ".join(str(issue.get("issue_content") or "").split())
+    return _format_location(path, issue.get("start_line"), issue.get("end_line")), header, content
+
+
 def _format_issue(issue: dict) -> str:
-    path = _escape_headings(str(issue.get("relevant_file") or "").strip())
-    header = _escape_headings(str(issue.get("issue_header") or "").strip())
-    content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
-    location = _format_location(path, issue.get("start_line"), issue.get("end_line"))
+    location, header, content = _issue_parts(issue)
     title = f"{header}: " if header else ""
-    return f"- {location} — {title}{content}".rstrip()
+    return _escape_headings(f"- {location} — {title}{content}".rstrip())
 
 
 NO_OP_PROMPT = "No issues found; no changes required."
@@ -193,10 +204,7 @@ def _derive_agent_prompt(issues: list[dict]) -> str:
     # starts with a heading, turning "\\## X" into "\\\\## X" in the posted body.
     lines = ["Fix the following issues reported by the PR review."]
     for issue in issues:
-        path = str(issue.get("relevant_file") or "").strip()
-        header = str(issue.get("issue_header") or "").strip()
-        content = " ".join(str(issue.get("issue_content") or "").split())
-        location = _format_location(path, issue.get("start_line"), issue.get("end_line"))
+        location, header, content = _issue_parts(issue)
         lines.append(f"- {location}: {header}. {content}".rstrip())
     lines.append("Keep each change minimal and leave the rest of the code untouched.")
     return "\n".join(lines)

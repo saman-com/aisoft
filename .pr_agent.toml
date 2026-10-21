@@ -66,6 +66,14 @@ issues. Give every key issue a concrete file, line range, and a one-sentence
 description of the failure scenario. Do not report style nits unless they cause
 a defect.
 
+A finding must name a specific input or sequence of events that makes the code
+behave wrongly. If you cannot name one, do not report it. In particular, never
+report something you describe as low risk, low confidence, unlikely, a possible
+issue, or as something the author should "confirm" or "verify" - if the outcome
+depends on facts you cannot check, it is not a finding. Do not report the absence
+of a test unless you can point to a specific wrong behaviour the test would have
+caught. Do not restate a deliberate, documented trade-off as an issue.
+
 Also fill the `agent_prompt` field with a single self-contained prompt that a
 coding agent can follow to fix every issue you listed. Name the files and lines
 to change and say what the fix is. Write it in plain prose, not as a list of
