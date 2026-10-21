@@ -12,13 +12,16 @@ Slice 2 parser uses.
 Run with: python3 -m unittest discover -s tests -v
 """
 
+import contextlib
+import io
 import pathlib
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 
-from post_contract_comment import pick_contract_comment  # noqa: E402
+from post_contract_comment import main, pick_contract_comment  # noqa: E402
 
 BOT = "github-actions[bot]"
 
@@ -83,6 +86,30 @@ class PickContractCommentTest(unittest.TestCase):
     def test_malformed_entries_are_skipped(self):
         comments = [{"id": 9}, comment(10, "## Confidence Score\n1/5")]
         self.assertEqual(pick_contract_comment(comments, BOT), 10)
+
+
+class MainTest(unittest.TestCase):
+    """A missing body file must be a clean error, not a traceback."""
+
+    def test_missing_body_file_exits_nonzero_without_posting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = pathlib.Path(tmp) / "nope.md"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = main(["--pr", "1", "--body-file", str(missing), "--repo", "o/r", "--author", BOT])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read", stderr.getvalue())
+
+    def test_a_non_contract_body_is_refused(self):
+        """Posting a body that is not a contract comment would break the parser."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "body.md"
+            path.write_text("just some text\n", encoding="utf-8")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = main(["--pr", "1", "--body-file", str(path), "--repo", "o/r", "--author", BOT])
+        self.assertEqual(code, 1)
+        self.assertIn("is not a contract comment", stderr.getvalue())
 
 
 if __name__ == "__main__":

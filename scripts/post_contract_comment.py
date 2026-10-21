@@ -159,9 +159,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--author", default=None, help="login the token posts as; detected if omitted")
     args = parser.parse_args(argv)
 
+    # Reading the body first: a missing or unreadable file must be a clean
+    # error, not a traceback, and posting nothing is better than guessing at a
+    # body or creating an empty comment.
+    try:
+        body = args.body_file.read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot read {args.body_file}: {error}", file=sys.stderr)
+        return 1
+
     author = args.author or resolve_author()
     repo = args.repo or _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
-    body = args.body_file.read_text(encoding="utf-8")
     if not body.lstrip().startswith(CONTRACT_HEADER):
         print(f"error: {args.body_file} is not a contract comment", file=sys.stderr)
         return 1
