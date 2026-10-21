@@ -137,6 +137,16 @@ class ScoreTest(unittest.TestCase):
         self.assertEqual(self.score_line("90"), "5/5")
         self.assertEqual(self.score_line(" 72 "), "4/5")
 
+    def test_a_score_written_with_its_scale_is_accepted(self):
+        """Models write "90/100" and "90%" often; that is not a contract breach."""
+        for spelling in ("90/100", "90%", " 90 out of 100 "):
+            self.assertEqual(self.score_line(spelling), "5/5", spelling)
+
+    def test_the_loops_own_scale_is_not_read_as_a_percentage(self):
+        """"4/5" must not become 80/100 and silently upgrade a 4 to a 5."""
+        with self.assertRaises(ContractError):
+            render_contract_comment(review(score="4/5"))
+
     def test_non_numeric_string_score_is_rejected(self):
         with self.assertRaises(ContractError):
             render_contract_comment(review(score="high"))

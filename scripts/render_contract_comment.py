@@ -38,6 +38,12 @@ SCORE_THRESHOLDS = ((90, 5), (70, 4), (50, 3), (30, 2), (10, 1))
 HEADING_ESCAPE = re.compile(r"^( {0,3})(#{1,6})(?=\s|$)", re.MULTILINE)
 
 
+# A score written as a string, with an optional scale: "90", "90/100", "90%",
+# "90 out of 100". Deliberately not `4/5` - that is already the loop's own
+# scale, and reading it as 80/100 would silently upgrade a 4 to a 5.
+SCORE_STRING = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:/\s*100|%|out of\s*100)?\s*$", re.IGNORECASE)
+
+
 def _score_to_fifths(raw: object) -> int:
     """Map PR-Agent's 0-100 score onto the loop's 0-5 scale.
 
@@ -56,10 +62,14 @@ def _score_to_fifths(raw: object) -> int:
     elif isinstance(raw, float):
         value = raw
     elif isinstance(raw, str):
-        try:
-            value = float(raw.strip())
-        except ValueError:
-            raise ContractError(f"score is not a number: {raw!r}") from None
+        # Models write the scale along with the number often enough that it is
+        # not a defect: "90/100" and "90%" mean the same as "90". Only the
+        # numeric part is read, so the loop does not stall on a cosmetic
+        # difference from the same review.
+        match = SCORE_STRING.match(raw)
+        if match is None:
+            raise ContractError(f"score is not a number: {raw!r}")
+        value = float(match.group(1))
     else:
         raise ContractError(f"missing or non-numeric score: {raw!r}")
 

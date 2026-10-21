@@ -21,7 +21,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 
-from post_contract_comment import main, pick_contract_comment  # noqa: E402
+from post_contract_comment import _split_json_arrays, main, pick_contract_comment  # noqa: E402
 
 BOT = "github-actions[bot]"
 
@@ -86,6 +86,23 @@ class PickContractCommentTest(unittest.TestCase):
     def test_malformed_entries_are_skipped(self):
         comments = [{"id": 9}, comment(10, "## Confidence Score\n1/5")]
         self.assertEqual(pick_contract_comment(comments, BOT), 10)
+
+
+class SplitJsonTest(unittest.TestCase):
+    """gh can print a warning next to the payload."""
+
+    def test_page_arrays_are_concatenated(self):
+        self.assertEqual(_split_json_arrays('[{"a":1}]\n[{"b":2}]'), [[{"a": 1}], [{"b": 2}]])
+
+    def test_trailing_noise_is_ignored(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            chunks = _split_json_arrays('[{"a":1}]\nwarning: something\n')
+        self.assertEqual(chunks, [[{"a": 1}]])
+        self.assertIn("unparseable", stderr.getvalue())
+
+    def test_empty_output_is_no_pages(self):
+        self.assertEqual(_split_json_arrays(""), [])
 
 
 class MainTest(unittest.TestCase):

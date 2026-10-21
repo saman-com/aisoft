@@ -109,6 +109,13 @@ def list_comments(repo: str, pr: int) -> list[dict]:
 
 
 def _split_json_arrays(out: str) -> list[list[dict]]:
+    """Parse the JSON arrays `gh api --paginate` concatenates.
+
+    Only whole arrays are read, and parsing stops at the first thing that is not
+    one. `gh` can print a warning to stdout alongside the payload, and letting
+    that raise JSONDecodeError would turn a readable comment list into a
+    traceback; the comments found so far are enough to decide what to post.
+    """
     decoder = json.JSONDecoder()
     chunks: list[list[dict]] = []
     index = 0
@@ -117,7 +124,11 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
             index += 1
         if index >= len(out):
             break
-        value, index = decoder.raw_decode(out, index)
+        try:
+            value, index = decoder.raw_decode(out, index)
+        except json.JSONDecodeError:
+            print("warning: ignoring unparseable output from gh api", file=sys.stderr)
+            break
         if isinstance(value, list):
             chunks.append(value)
     return chunks
