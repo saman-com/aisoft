@@ -2,9 +2,26 @@
 
 A push re-runs the workflow, and until the new review replaces the old one the PR
 still shows the previous comment. So "wait for the review" cannot mean "wait for a
-comment to exist" - it has to mean "wait for a comment newer than the one I
-already read". `newer_than` carries that: the id of the comment the previous
-iteration read.
+comment to exist" - it has to mean "wait for a review written after my push".
+
+The subtlety is that the poster (Slice 1) keeps **one** contract comment per PR
+and edits it in place with PATCH, so its id never changes after the first
+iteration. Waiting on a larger id therefore works exactly once and then times out
+forever. A review counts as new when either:
+
+- its id is larger than the baseline's (a genuinely new comment), or
+- it is that same comment and its body or `updated_at` has changed (a rewrite).
+
+`updated_at` alone is not enough because GitHub reports it with one-second
+resolution, and a fast rewrite lands in the same second as the review it replaces,
+so the body is the signal that actually matters. Bodies are compared with trailing
+whitespace ignored, because a baseline carried through a shell
+(`--baseline-body "$(cat before.md)"`) loses its trailing newline.
+
+The baseline is the comment the caller read before the push, so
+`baseline=<Comment>` or `baseline=<body>` is preferred. `newer_than=<id>` remains
+for a caller that has only an id; it cannot detect an in-place rewrite, which is
+its own documented limitation.
 
 Polling always ends. An unattended loop that waits forever leaves nobody able to
 notice, so the timeout raises with a message naming the PR and what to check.
@@ -13,7 +30,11 @@ Usage:
 
     python3 scripts/driver_comments.py --pr 27 --timeout 600
     python3 scripts/driver_comments.py --pr 27 --newer-than 6306554503
+    python3 scripts/driver_comments.py --pr 27 --baseline-body "$(cat before.md)"
 """
+
+# Timeout and interval are documented in AGENT.md. Slice 4 reuses these values
+# rather than choosing its own.
 
 from __future__ import annotations
 
@@ -162,23 +183,74 @@ def contract_comment(comments: list[dict], author: str = WORKFLOW_AUTHOR) -> Com
     return newest
 
 
+@dataclass(frozen=True)
+class Baseline:
+    """What the caller already read. Fields it does not know stay None.
+
+    `None` means *unknown*, not *empty*: a baseline given only as an id must not
+    report an empty body as a change, or every comment would look fresh.
+    """
+
+    id: int | None = None
+    body: str | None = None
+    updated_at: str | None = None
+
+
+def is_fresh(found: Comment, baseline: Baseline | None) -> bool:
+    """Whether `found` is a review written after `baseline` was read.
+
+    The poster edits one comment in place, so the id stays the same across
+    iterations and cannot carry freshness on its own. What does change is the
+    body, and usually `updated_at`.
+    """
+    if baseline is None:
+        return True
+
+    if baseline.id is not None and found.id != baseline.id:
+        # GitHub ids are snowflakes and a rewrite keeps its id, so a different id
+        # means a different comment. Only a larger one is newer.
+        return found.id > baseline.id
+
+    # Same comment (or unknown id): freshness is whether it has been rewritten.
+    # Bodies are compared with trailing whitespace ignored: a baseline carried
+    # through shell substitution (`--baseline-body "$(cat before.md)"`) loses its
+    # trailing newline, and that must not read as "the review was rewritten".
+    if baseline.body is not None and _body_of(found) != _body_of(baseline):
+        return True
+    if baseline.body is None and not baseline.updated_at:
+        return False  # an id-only baseline cannot see an edit
+    # An empty `updated_at` is *unknown*, not a value: a `Comment` built without it
+    # (the dataclass default) would otherwise compare "" != "2026-..." and report
+    # an untouched comment as the new review, ending the wait immediately.
+    if not baseline.updated_at:
+        return False
+    return found.updated_at != baseline.updated_at
+
+
+def _body_of(value: Comment | Baseline) -> str:
+    """The body, normalised so shell-carried copies compare equal."""
+    return (value.body or "").replace("\r\n", "\n").strip()
+
+
 def wait_for_contract_comment(
     repo: str,
     pr: int,
     *,
     newer_than: int | None = None,
+    baseline: Comment | str | Baseline | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     interval: float = DEFAULT_INTERVAL,
     author: str = WORKFLOW_AUTHOR,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> Comment:
-    """Poll until a contract comment newer than `newer_than` appears.
+    """Poll until a contract comment written after `baseline` appears.
 
-    `newer_than` is the id the caller already has. GitHub ids are snowflakes, so
-    a larger id means a later comment; comparing ids is how this tells the new
-    review from the one the push is about to replace.
+    `baseline` is the comment the caller already read. Prefer passing the whole
+    `Comment`: the same comment is edited in place, so its id alone cannot show
+    that the review was rewritten.
     """
+    before = _baseline(baseline, newer_than)
     deadline = clock() + timeout
     last_seen: Comment | None = None
 
@@ -186,30 +258,48 @@ def wait_for_contract_comment(
         found = contract_comment(list_comments(repo, pr), author)
         if found is not None:
             last_seen = found
-            if newer_than is None or found.id > newer_than:
+            if is_fresh(found, before):
                 return found
 
         if clock() >= deadline:
-            raise _timeout(pr, newer_than, last_seen, timeout)
+            raise _timeout(pr, before, last_seen, timeout)
 
         sleep(interval)
 
 
+def _baseline(
+    baseline: Comment | str | Baseline | None, newer_than: int | None
+) -> Baseline | None:
+    """Normalise what the caller gave into the fields it actually knows."""
+    if isinstance(baseline, Baseline):
+        return baseline
+    if isinstance(baseline, Comment):
+        return Baseline(id=baseline.id, body=baseline.body, updated_at=baseline.updated_at)
+    if isinstance(baseline, str):
+        return Baseline(body=baseline)
+    if newer_than is not None:
+        return Baseline(id=newer_than)
+    return None
+
+
 def _timeout(
-    pr: int, newer_than: int | None, last_seen: Comment | None, timeout: float
+    pr: int, baseline: Baseline | None, last_seen: Comment | None, timeout: float
 ) -> ReviewTimeout:
     message = (
         f"no new review on #{pr} within {timeout:.0f}s. "
         "Check the Actions tab: the workflow may have failed, still be running, "
         "or been skipped (fork PRs are skipped)."
     )
-    if newer_than is not None and last_seen is not None:
+    if baseline is not None and last_seen is not None:
+        read = f"id {baseline.id}" if baseline.id is not None else "the copy read before the push"
         message += (
-            f" A contract comment exists (id {last_seen.id}) but it is not newer "
-            f"than {newer_than}, so it is the review this push is replacing."
+            f" A contract comment exists (id {last_seen.id}) but it is unchanged "
+            f"from {read}, so it is the review this push is replacing."
         )
-    elif newer_than is not None:
-        message += f" No contract comment newer than {newer_than} appeared."
+    elif baseline is not None and baseline.id is not None:
+        message += f" No contract comment newer than id {baseline.id} appeared."
+    elif baseline is not None:
+        message += " No contract comment whose body differs from the baseline appeared."
     return ReviewTimeout(message)
 
 
@@ -218,6 +308,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repo")
     parser.add_argument("--newer-than", type=int, default=None)
+    parser.add_argument(
+        "--baseline-body",
+        default=None,
+        help="body of the comment already read; the wait ends when it is rewritten",
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
     args = parser.parse_args(argv)
@@ -232,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
             repo,
             args.pr,
             newer_than=args.newer_than,
+            baseline=args.baseline_body,
             timeout=args.timeout,
             interval=args.interval,
         )

@@ -20,6 +20,7 @@ Usage:
     python3 scripts/driver.py --pr 27 --wait --timeout 600
     python3 scripts/driver.py --branch my-branch --json
     python3 scripts/driver.py --pr 27 --newer-than 6306554503
+    python3 scripts/driver.py --pr 27 --wait --baseline-body "$(cat before.md)"
 """
 
 from __future__ import annotations
@@ -95,6 +96,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repository")
     parser.add_argument("--wait", action="store_true", help="poll until a new review appears")
     parser.add_argument("--newer-than", type=int, default=None, help="comment id already read")
+    parser.add_argument(
+        "--baseline-body",
+        default=None,
+        help=(
+            "body of the contract comment read before the push; a wait returns when "
+            "the comment is rewritten. Prefer this over --newer-than: the poster "
+            "edits one comment in place, so its id does not change"
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
     parser.add_argument("--json", action="store_true", help="print the parsed review as JSON")
@@ -113,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo,
                 pull_request.number,
                 newer_than=args.newer_than,
+                baseline=args.baseline_body,
                 timeout=args.timeout,
                 interval=args.interval,
             )

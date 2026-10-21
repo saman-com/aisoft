@@ -20,6 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from driver_comments import (  # noqa: E402
     CONTRACT_HEADER,
+    Comment,
+    DEFAULT_INTERVAL,
+    DEFAULT_TIMEOUT,
     ReviewTimeout,
     contract_comment,
     wait_for_contract_comment,
@@ -35,6 +38,14 @@ def comment(comment_id: int = 1, body: str = BODY, login: str = "github-actions[
         "user": {"login": login, "type": "Bot"},
         "updated_at": "2026-10-21T05:00:00Z",
     }
+
+
+def comment_object(raw: dict) -> Comment:
+    """The dataclass a caller would hold after reading a review."""
+    return Comment(
+        id=raw["id"], body=raw["body"], author=raw["user"]["login"],
+        updated_at=raw.get("updated_at", ""),
+    )
 
 
 class ContractCommentTest(unittest.TestCase):
@@ -118,7 +129,7 @@ class WaitTest(unittest.TestCase):
         self.assertIn("#27", message)
         self.assertIn("Actions", message)
 
-    def test_a_timeout_mentions_the_stale_comment_it_ignored(self):
+    def test_a_timeout_mentions_the_stale_comment_it_ignored(self):  # noqa: D401
         """If an old review exists, saying so explains the wait, not just the end."""
         with mock.patch("driver_comments.list_comments", return_value=[comment(4)]):
             with self.assertRaises(ReviewTimeout) as caught:
@@ -126,7 +137,9 @@ class WaitTest(unittest.TestCase):
                     "owner/repo", 27, newer_than=4, timeout=0, interval=0,
                     sleep=lambda _seconds: None, clock=fake_clock(0, 1),
                 )
-        self.assertIn("newer than", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("unchanged", message)
+        self.assertIn("replacing", message)
 
     def test_waits_zero_times_when_the_comment_already_exists(self):
         with mock.patch("driver_comments.list_comments", return_value=[comment(4)]) as listed:
@@ -145,6 +158,160 @@ def fake_clock(*values: float):
         return readings.pop(0) if len(readings) > 1 else readings[0]
 
     return clock
+
+
+class RewrittenCommentTest(unittest.TestCase):
+    """The poster edits one comment in place, so its id never changes.
+
+    Slice 1 settled on a single contract comment per PR, updated with PATCH, so
+    after the first iteration the id is fixed. Telling the new review from the old
+    one therefore cannot rely on the id alone: the body changes, and so does
+    `updated_at`.
+    """
+
+    def test_the_edited_comment_counts_as_the_new_review(self):
+        stale = comment(4, body=BODY)
+        edited = comment(4, body=BODY.replace("4/5", "5/5"))
+        edited["updated_at"] = "2026-10-21T05:10:00Z"
+        replies = [[stale], [edited]]
+        with mock.patch("driver_comments.list_comments", side_effect=replies):
+            found = wait_for_contract_comment(
+                "owner/repo", 27, baseline=comment_object(stale), timeout=5, interval=0,
+                sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+            )
+        self.assertEqual(found.id, 4)
+        self.assertIn("5/5", found.body)
+
+    def test_an_unchanged_comment_does_not_end_the_wait(self):
+        """Same id, same body: nothing has been rewritten, so keep waiting."""
+        same = comment(4)
+        with mock.patch("driver_comments.list_comments", return_value=[same]):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27, newer_than=4, timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
+    def test_an_edit_is_detected_even_when_the_updated_at_is_the_same_second(self):
+        """`updated_at` has one-second resolution; the body is the reliable signal."""
+        stale = comment(4, body=BODY)
+        edited = comment(4, body=BODY.replace("4/5", "5/5"))
+        replies = [[stale], [edited]]
+        with mock.patch("driver_comments.list_comments", side_effect=replies):
+            found = wait_for_contract_comment(
+                "owner/repo", 27, baseline=comment_object(stale), timeout=5, interval=0,
+                sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+            )
+        self.assertIn("5/5", found.body)
+
+    def test_an_id_only_baseline_cannot_see_an_edit(self):
+        """The documented limitation, so callers know to pass the whole comment.
+
+        Slice 1 edits one comment in place, so an id-only baseline sees a rewrite
+        as "unchanged" and waits out its timeout. T3.4 therefore passes the
+        `Comment` it read before pushing.
+        """
+        stale = comment(4, body=BODY)
+        edited = comment(4, body=BODY.replace("4/5", "5/5"))
+        with mock.patch("driver_comments.list_comments", side_effect=[[stale], [edited]]):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27, newer_than=4, timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
+    def test_an_empty_updated_at_is_unknown_not_a_change(self):
+        """`updated_at=""` means the caller did not know it, not "it changed".
+
+        A `Comment` built without `updated_at` (the dataclass default) made
+        `is_fresh` compare `"" != "2026-..."` and report an untouched comment as a
+        new review, which would end the wait on the review it was replacing.
+        """
+        stale = comment(4, body=BODY)
+        with mock.patch("driver_comments.list_comments", return_value=[stale]):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27,
+                    baseline=Comment(id=4, body=BODY, author="github-actions[bot]"),
+                    timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
+    def test_a_body_carried_through_a_shell_is_still_the_same_comment(self):
+        """`$(cat before.md)` drops the trailing newline, and CRLF may differ."""
+        stale = comment(4, body=BODY)
+        carried = BODY.rstrip("\n").replace("\n", "\r\n")
+        replies = [[stale], [stale]]
+        with mock.patch("driver_comments.list_comments", side_effect=replies):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27, baseline=carried, timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
+    def test_a_real_change_is_still_detected_with_the_baseline_stripped(self):
+        stale = comment(4, body=BODY)
+        edited = comment(4, body=BODY.replace("4/5", "5/5"))
+        with mock.patch("driver_comments.list_comments", side_effect=[[stale], [edited]]):
+            found = wait_for_contract_comment(
+                "owner/repo", 27, baseline=BODY.rstrip("\n"), timeout=5, interval=0,
+                sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+            )
+        self.assertIn("5/5", found.body)
+
+    def test_a_comment_with_an_older_id_but_a_new_body_is_not_new(self):
+        """A stale page must not resurrect a previous iteration's review."""
+        with mock.patch("driver_comments.list_comments", return_value=[comment(2, BODY.replace("4/5", "5/5"))]):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27, newer_than=4, timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
+
+class DocumentedNumbersTest(unittest.TestCase):
+    """Slice 4 must not invent its own timeout and interval."""
+
+    def test_the_default_timeout_is_ten_minutes(self):
+        self.assertEqual(DEFAULT_TIMEOUT, 600.0)
+
+    def test_the_default_interval_is_fifteen_seconds(self):
+        self.assertEqual(DEFAULT_INTERVAL, 15.0)
+
+    def test_agent_md_states_both_numbers(self):
+        text = (Path(__file__).resolve().parents[1] / "AGENT.md").read_text()
+        self.assertIn("600", text)
+        self.assertIn("15", text)
+        self.assertIn("DEFAULT_TIMEOUT", text)
+
+    def test_the_interval_is_short_enough_to_finish_inside_the_timeout(self):
+        self.assertLess(DEFAULT_INTERVAL, DEFAULT_TIMEOUT / 4)
+
+
+class BaselineTest(unittest.TestCase):
+    def test_a_first_read_needs_no_baseline(self):
+        with mock.patch("driver_comments.list_comments", return_value=[comment(4)]):
+            found = wait_for_contract_comment(
+                "owner/repo", 27, newer_than=None, timeout=0, interval=0
+            )
+        self.assertEqual(found.id, 4)
+
+    def test_the_baseline_is_the_comment_just_read_when_none_was_given(self):
+        """T3.4: read the old review, push, then wait for it to be replaced.
+
+        Passing only the id would be wrong here, because the id survives the
+        rewrite. The body read before the push is the baseline.
+        """
+        stale = comment(4, body=BODY)
+        edited = comment(4, body=BODY.replace("4/5", "5/5"))
+        replies = [[stale], [edited]]
+        with mock.patch("driver_comments.list_comments", side_effect=replies):
+            found = wait_for_contract_comment(
+                "owner/repo", 27, baseline=comment_object(stale), timeout=5, interval=0,
+                sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+            )
+        self.assertIn("5/5", found.body)
+
 
 
 if __name__ == "__main__":

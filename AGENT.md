@@ -109,6 +109,47 @@ environment variables take precedence.
 `tests/test_pr_agent_config.py` guards both halves: it asserts the branch variable
 is absent and that the workflow `env:` values match the TOML.
 
+### The push is explicit, verified, and never forced
+
+`scripts/driver_git.py` owns every write the loop makes to git. It refuses the
+default branch, refuses a branch that changed mid-run (Pi has a shell and can run
+`git checkout`), pushes an explicit refspec with no force flag, and reads
+`refs/remotes/origin/<branch>` back afterwards instead of trusting the exit status.
+
+A push that reports success but did not land would leave the loop waiting for a
+review of a commit that never arrived, so the verification is not optional. A
+force-push is never acceptable here: it rewrites a branch a human may have based
+work on, and a rejected push means the remote moved and a human needs to look.
+
+A clean tree whose head is already on the remote raises `NothingToPush` (exit 2),
+not success. Treating it as success burns an iteration re-triggering a review of
+unchanged code. A failed commit or push raises (exit 1) and names the local commit
+that did not reach the remote.
+
+### Waiting for a re-review is bounded, and its numbers are fixed here
+
+After a push the loop waits for the *new* review, not just any review, via
+`scripts/driver_comments.py::wait_for_contract_comment`. Two numbers are settled
+here so Slice 4 does not invent its own:
+
+| Setting | Value | Why |
+|---|---|---|
+| `DEFAULT_TIMEOUT` | **600 s (10 minutes)** | A workflow run measured 50 s to ~2 min; 10 min leaves room for queuing without hiding a broken pipeline behind a long wait. |
+| `DEFAULT_INTERVAL` | **15 s** | A run takes far longer than 15 s, so faster polling only spends API calls; slower makes every iteration feel stalled. |
+
+Both live in `scripts/driver_comments.py` and are asserted by
+`tests/test_driver_comments.py::DocumentedNumbersTest`. Change them there, and
+update this table in the same commit. A timeout raises `ReviewTimeout` (exit 2),
+which is *not* the same as a broken review (exit 3): it means "the review has not
+arrived yet", so the message names the PR and says to check the Actions tab.
+
+**Freshness is decided on content, not on the comment id.** The poster keeps one
+contract comment per PR and edits it in place, so the id never changes after the
+first iteration. Pass the `Comment` you read (`baseline=`): the wait returns when
+the id grows beyond it or its body (or `updated_at`) differs. An id-only baseline
+(`newer_than=`) cannot detect an in-place rewrite and will time out; that limitation
+is documented by its own test. The old comment is never accepted as the new one.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table
