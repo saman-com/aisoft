@@ -62,7 +62,8 @@
 ## Slice 2 – Local Parser (Read-Only)
 **Exit criteria:** A local script can reliably extract the Confidence Score and Agent Prompt from an existing PR-Agent comment.
 
-- [ ] **T2.1** Decide driver language (recommend Python)
+- [x] **T2.1** Decide driver language (recommend Python)
+  Decision: Python 3, standard library only. Rationale in issue #9.
 
 - [ ] **T2.2** Implement PR detection (`gh` CLI)
 
