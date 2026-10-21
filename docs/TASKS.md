@@ -12,9 +12,9 @@
 ## Progress Overview
 
 - [x] **Slice 0** – Foundation & Contracts
-- [ ] **Slice 1** – PR-Agent Review Only
+- [x] **Slice 1** – PR-Agent Review Only
 - [x] **Slice 2** – Local Parser (Read-Only)
-- [ ] **Slice 3** – Single Fix Cycle
+- [x] **Slice 3** – Single Fix Cycle
 - [ ] **Slice 4** – Full Loop (max 5 iterations)
 - [ ] **Slice 5** – Pi Creates the PR
 
@@ -95,7 +95,18 @@
   `scripts/driver_comments.py::wait_for_contract_comment` — 600 s timeout, 15 s interval,
   freshness by body so an in-place rewrite counts as new; the old review never counts
 
-- [ ] **T3.4** End-to-end single-cycle test on a real PR
+- [x] **T3.4** End-to-end single-cycle test on a real PR
+  - `scripts/driver_cycle.py` wires the Slice 2 parser, `driver_pi`, `driver_git` and
+    the T3.3 wait into one cycle: read review, Pi, commit+push, wait for a newer
+    review, parse it
+  - verified on PR #29 (workflow run 39675907534): 4/5 with one issue read, Pi
+    fixed it, the push landed, and a rewritten review arrived as 4/5 with a
+    different issue - no manual copy-paste at any step
+  - the same run exposed three real defects, each fixed with a failing test first:
+    a single-branch clone never creates the tracking ref for a newly pushed
+    branch (the read-back aborted a push that had landed), an empty `updated_at`
+    read as a rewrite, and the exit-code ordering that keeps a missing review at
+    exit 2
 
 **Slice 3 complete when:** One complete fix cycle runs without manual copy-paste.
 
