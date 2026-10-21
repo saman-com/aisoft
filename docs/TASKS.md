@@ -42,7 +42,7 @@
 ## Slice 1 – PR-Agent Review Only
 **Exit criteria:** Opening or pushing to a PR automatically produces a structured review comment containing Score / Issues / Agent Prompt.
 
-- [ ] **T1.1** Implement real GitHub Action with PR-Agent + OpenRouter
+- [x] **T1.1** Implement real GitHub Action with PR-Agent + OpenRouter
 
 - [ ] **T1.2** Configure model and review flags  
   (`require_score_review`, risk assessment, merge recommendation)

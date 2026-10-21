@@ -1,44 +1,41 @@
 name: PR-Agent
 
-# Slice 0 skeleton: this workflow only proves the trigger and permissions
-# wiring. Slice 1 (T1.1) replaces the placeholder step with the real
-# `the-pr-agent/pr-agent` action call.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# PR-Agent needs to read the diff and post a review comment on the PR.
+# PR-Agent reads the diff through the GitHub API and posts a review comment,
+# so it needs read access to the repo and write access to the PR.
 permissions:
   contents: read
   pull-requests: write
   issues: write
 
+# One review at a time per PR. A new push cancels the review of the previous
+# head, which is what we want: the parser polls for the latest review.
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   pr-agent:
     name: PR-Agent review
     runs-on: ubuntu-latest
+    # Never review PRs opened by PR-Agent's own bot account, and never try to
+    # review from forks where the OpenRouter secret is unavailable.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # ---------------------------------------------------------------
-      # PLACEHOLDER - the real PR-Agent step goes here in Slice 1 (T1.1).
-      # It will run `the-pr-agent/pr-agent` with:
-      #   OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      #   GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
-      #   github_action_config.auto_review: "true"
-      # ---------------------------------------------------------------
-      - name: Placeholder (PR-Agent step added in T1.1)
-        # Head/base refs come from a PR author's fork, so they are untrusted:
-        # pass them through env instead of inlining them into the script.
+      - name: Run PR-Agent
+        uses: the-pr-agent/pr-agent@v0.48.0
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          echo "PR-Agent skeleton workflow is wired up."
-          echo "Event: $EVENT_NAME"
-          echo "PR: #$PR_NUMBER ($HEAD_REF -> $BASE_REF)"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PR-Agent reads OpenRouter credentials from OPENROUTER__KEY
+          # (the [openrouter] key in its secrets template). GitHub stores the
+          # value as OPENROUTER_API_KEY - see README.md.
+          OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Model and review flags come from .pr_agent.toml at the repo root.
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
