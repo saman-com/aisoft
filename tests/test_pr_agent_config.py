@@ -139,6 +139,33 @@ class WorkflowTest(unittest.TestCase):
     def test_openrouter_key_comes_from_the_repository_secret(self):
         self.assertIn("OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}", self.text)
 
+    def test_operational_budget_is_set_in_the_workflow(self):
+        """Env outranks repo config, so this survives a stale default branch.
+
+        When the reviewer started reading .pr_agent.toml from master, the token
+        budget added in this branch stopped applying and every run failed with
+        "Model ... is not defined in MAX_TOKENS ... and no
+        custom_model_max_tokens is set". Setting it here means a review can run
+        even when the default branch's config is stale or broken.
+        """
+        self.assertIn('CONFIG__CUSTOM_MODEL_MAX_TOKENS:', self.text)
+        self.assertIn('CONFIG__MAX_OUTPUT_TOKENS:', self.text)
+        self.assertIn('CONFIG__REASONING_EFFORT:', self.text)
+        self.assertIn('CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS:', self.text)
+
+    def test_operational_budget_matches_the_toml(self):
+        """The two sources must not drift apart.
+
+        Environment wins, so a mismatch would silently override the checked-in
+        value and the toml tests would be asserting something unused.
+        """
+        config = load_config()["config"]
+        for key, env_name in (
+            ("max_output_tokens", "CONFIG__MAX_OUTPUT_TOKENS"),
+            ("custom_model_max_tokens", "CONFIG__CUSTOM_MODEL_MAX_TOKENS"),
+        ):
+            self.assertIn(f'{env_name}: "{config[key]}"', self.text, key)
+
     def test_github_token_is_passed(self):
         self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.text)
 

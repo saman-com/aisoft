@@ -54,13 +54,25 @@ jobs:
           # synchronize" and never re-reviews after a push - which is the event
           # the whole fix loop depends on.
           github_action_config.pr_actions: '["opened", "reopened", "synchronize", "ready_for_review"]'
-          # Do NOT point this at the PR head. PR-Agent reads .pr_agent.toml from
-          # the default branch, and that is load-bearing here: a PR that could
-          # supply its own extra_instructions could ask to be scored 5/5, which
-          # is the one thing the whole loop depends on being honest. Host-only
-          # key filtering does not help - extra_instructions and model are
-          # deliberately repo-settable. The cost is that a change to the review
-          # config takes effect after merge, not during the PR that makes it.
+          # Do NOT point PR_AGENT_CONFIG_BRANCH at the PR head. PR-Agent reads
+          # .pr_agent.toml from the default branch, and that is load-bearing: a
+          # PR that could supply its own extra_instructions could ask to be
+          # scored 5/5, which is the one thing the loop depends on being honest.
+          # Host-only key filtering does not help - extra_instructions and model
+          # are deliberately repo-settable. PR-Agent's own docs warn against
+          # deriving this from ${{ github.head_ref }} for the same reason.
+          #
+          # The operational keys below are supplied here instead. Environment
+          # variables outrank repo config, so the review runs on a known-good
+          # budget regardless of what the default branch happens to contain, and
+          # a broken .pr_agent.toml cannot stop reviews from running at all.
+          # These are not review judgements: the score, the findings and the
+          # prompt all still come from the model under maintainer-controlled
+          # rules.
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "1048576"
+          CONFIG__MAX_OUTPUT_TOKENS: "8000"
+          CONFIG__REASONING_EFFORT: "none"
+          CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: '["deepseek/deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash"]'
           #
           # push_outputs is host-only configuration: a repository's
           # .pr_agent.toml cannot enable it, so it is set here, where the
