@@ -13,8 +13,17 @@ fallback_models = ["openrouter/deepseek/deepseek-v4.1-flash"]
 #   ERROR pr_agent.algo.token_budget:get_max_tokens:161 - Model
 #   openrouter/deepseek/deepseek-v4.1-flash-1017 is not defined in MAX_TOKENS ...
 # 1048576 is the model's real context length; config.max_model_tokens (32000)
-# still caps what PR-Agent actually sends.
+# still caps the input PR-Agent actually sends.
 custom_model_max_tokens = 1048576
+# Cap the completion. Without this the provider's own ceiling applies (393216
+# for this model), and the model spends the whole budget: runs took 8m20s and
+# 10m20s with finish_reason "length" and an empty body, so the review always
+# fell through to the fallback model. A review comment needs far less than this.
+max_output_tokens = 8000
+# Reasoning was the cause of the overrun: with the default effort and no token
+# cap the model reasoned through the entire completion budget before writing
+# anything. Reviews are diff-reading, not multi-step deduction.
+reasoning_effort = "low"
 # The contract comment is rendered by scripts/render_contract_comment.py and
 # posted by the workflow. PR-Agent still computes the review (that is how the
 # structured output is produced), but its own rendering must not become a

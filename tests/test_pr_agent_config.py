@@ -77,6 +77,23 @@ class ModelTest(unittest.TestCase):
         for model in fallbacks:
             self.assertTrue(model.startswith("openrouter/"), model)
 
+    def test_output_is_capped(self):
+        """An uncapped completion is what made runs take 8-20 minutes.
+
+        With no max_output_tokens the provider's ceiling applies (393216 for
+        this model). Two runs spent 8m20s and 10m20s reasoning, finished with
+        finish_reason "length" and an empty body, and fell through to the
+        fallback model - so every review cost two full-length generations.
+        PR-Agent raises anything below 4096 (MIN_MAX_OUTPUT_TOKENS).
+        """
+        value = self.config.get("max_output_tokens")
+        self.assertIsInstance(value, int)
+        self.assertGreaterEqual(value, 4096)
+
+    def test_reasoning_effort_is_not_the_expensive_default(self):
+        """The default "medium" is what consumed the uncapped budget."""
+        self.assertIn(self.config.get("reasoning_effort"), {"none", "minimal", "low"})
+
     def test_custom_model_max_tokens_is_set(self):
         """PR-Agent must have a token budget for our OpenRouter alias.
 
