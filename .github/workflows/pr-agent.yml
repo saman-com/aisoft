@@ -93,14 +93,22 @@ jobs:
       # read and waits forever for a review that already failed. A 0/5 comment
       # is the honest signal: it fails the loop's "keep going" test immediately
       # and says why, instead of looking like a review that never arrived.
+      #
+      # This does overwrite a good earlier review when PR-Agent fails only
+      # transiently, and the loop then stops and asks for a human. That is the
+      # direction to fail in: the alternative - leaving the old review in place -
+      # makes the loop try to fix findings it already fixed, or worse, treat a
+      # stale 5/5 as a merge signal. A stopped loop is cheap; a wrong merge is not.
       - name: Render the contract comment
         if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 scripts/render_contract_comment.py \
             --jsonl pr-agent-output/review.jsonl \
             --out contract-comment.md \
           || python3 scripts/render_contract_comment.py --failure \
-            "PR-Agent produced no usable review; see the workflow run" \
+            "PR-Agent produced no usable review; see $RUN_URL" \
             --out contract-comment.md
           echo "----- rendered comment -----"
           cat contract-comment.md

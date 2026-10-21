@@ -79,6 +79,20 @@ class HeadingInjectionTest(unittest.TestCase):
         out = render_contract_comment(data)
         self.assertEqual(self.headings(out), ["## Confidence Score", "## Issues", "## Agent Prompt"])
 
+    def test_an_indented_heading_is_escaped(self):
+        """Up to three spaces still renders as a heading in Markdown."""
+        out = render_contract_comment(review(agent_prompt="Do this.\n   ## Issues\n- fake"))
+        self.assertEqual(self.headings(out), ["## Confidence Score", "## Issues", "## Agent Prompt"])
+
+    def test_a_deeply_indented_heading_is_left_alone(self):
+        """Four spaces is code, not a heading, so it cannot invent a section."""
+        out = render_contract_comment(review(agent_prompt="Example:\n    ## Issues"))
+        self.assertEqual(self.headings(out), ["## Confidence Score", "## Issues", "## Agent Prompt"])
+
+    def test_a_hash_word_is_not_an_heading(self):
+        out = render_contract_comment(review(agent_prompt="See #123 and fix it."))
+        self.assertIn("See #123 and fix it.", out)
+
     def test_an_escaped_heading_stays_readable(self):
         out = render_contract_comment(review(agent_prompt="Beware ## Issues in the text"))
         self.assertIn("Beware ## Issues in the text", out)

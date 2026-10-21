@@ -169,7 +169,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     author = args.author or resolve_author()
-    repo = args.repo or _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
+    try:
+        repo = args.repo or _gh(
+            "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"
+        ).strip()
+    except (subprocess.CalledProcessError, OSError) as error:
+        # A runner with no remote, or no gh at all, should say so rather than
+        # die in a traceback.
+        print(f"error: cannot determine the repository: {error}", file=sys.stderr)
+        return 1
+    if not repo:
+        print("error: no repository given and none detected", file=sys.stderr)
+        return 1
     if not body.lstrip().startswith(CONTRACT_HEADER):
         print(f"error: {args.body_file} is not a contract comment", file=sys.stderr)
         return 1

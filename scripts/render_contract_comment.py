@@ -30,7 +30,12 @@ class ContractError(ValueError):
 SCORE_THRESHOLDS = ((90, 5), (70, 4), (50, 3), (30, 2), (10, 1))
 
 # A line that starts a Markdown heading, e.g. "## Issues" or "# Agent Prompt".
-HEADING_ESCAPE = re.compile(r"^(#{1,6})(?=\s|$)", re.MULTILINE)
+#
+# Up to three leading spaces are allowed because Markdown still renders those
+# as headings, so a model quoting "  ## Issues" would produce one just as surely
+# as an unindented line. Deeper indentation is code or list content and is left
+# alone.
+HEADING_ESCAPE = re.compile(r"^( {0,3})(#{1,6})(?=\s|$)", re.MULTILINE)
 
 
 def _score_to_fifths(raw: object) -> int:
@@ -147,7 +152,7 @@ def _escape_headings(text: str) -> str:
     Only line-initial `#` runs are touched, so a heading mentioned mid-sentence
     stays readable.
     """
-    return HEADING_ESCAPE.sub(r"\\\1", text)
+    return HEADING_ESCAPE.sub(r"\1\\\2", text)
 
 
 def _derive_agent_prompt(issues: list[dict]) -> str:
