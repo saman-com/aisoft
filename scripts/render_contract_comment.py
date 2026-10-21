@@ -236,17 +236,39 @@ def latest_review(jsonl_path: pathlib.Path) -> dict:
     raise ContractError(f"no review record in {jsonl_path}")
 
 
+def failure_comment(reason: str) -> str:
+    """Render the comment to post when no review could be produced.
+
+    A 0/5 score is deliberate: the loop reads the score to decide whether to
+    keep going, so this stops it at once and names the real problem. Leaving no
+    comment at all would look identical to a review that has not arrived yet,
+    and the loop would wait for one that never will.
+    """
+    reason = _escape_headings(" ".join(reason.split())) or "review failed"
+    return f"## Confidence Score\n0/5\n\n## Issues\n- Review failed: {reason}\n\n## Agent Prompt\nDo not attempt a fix. The review itself failed, so there is nothing to act on. Check the workflow run logs.\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--jsonl", required=True, type=pathlib.Path)
+    parser.add_argument("--jsonl", type=pathlib.Path)
+    parser.add_argument(
+        "--failure",
+        metavar="REASON",
+        help="write a 0/5 comment for a review that could not be produced",
+    )
     parser.add_argument("--out", type=pathlib.Path)
     args = parser.parse_args(argv)
 
-    try:
-        comment = render_contract_comment(latest_review(args.jsonl))
-    except (ContractError, OSError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
+    if args.failure is not None:
+        comment = failure_comment(args.failure)
+    elif args.jsonl is None:
+        parser.error("one of --jsonl or --failure is required")
+    else:
+        try:
+            comment = render_contract_comment(latest_review(args.jsonl))
+        except (ContractError, OSError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
 
     if args.out:
         args.out.write_text(comment, encoding="utf-8")

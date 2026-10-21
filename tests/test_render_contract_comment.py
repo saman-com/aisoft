@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 
-from render_contract_comment import ContractError, render_contract_comment  # noqa: E402
+from render_contract_comment import ContractError, failure_comment, render_contract_comment  # noqa: E402
 
 
 def review(**overrides):
@@ -266,3 +266,51 @@ class AgentPromptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailureCommentTest(unittest.TestCase):
+    """A failed review must still answer the loop.
+
+    Without a comment the loop sees nothing to parse and waits for a review that
+    already failed. A 0/5 comment stops it immediately and says why.
+    """
+
+    def test_failure_is_zero_out_of_five(self):
+        out = failure_comment("model returned nothing")
+        self.assertIn("## Confidence Score\n0/5", out)
+
+    def test_failure_keeps_the_three_section_layout(self):
+        out = failure_comment("boom")
+        headings = [line for line in out.splitlines() if line.startswith("## ")]
+        self.assertEqual(headings, ["## Confidence Score", "## Issues", "## Agent Prompt"])
+
+    def test_failure_reason_is_present_and_single_line(self):
+        out = failure_comment("boom\n\nsecond line")
+        self.assertIn("boom second line", out)
+
+    def test_failure_prompt_says_not_to_fix(self):
+        out = failure_comment("boom")
+        self.assertIn("Do not attempt a fix", out)
+
+    def test_empty_reason_still_renders(self):
+        self.assertIn("Review failed", failure_comment("   "))
+
+
+class ScoreBoundaryTest(unittest.TestCase):
+    """Threshold edges, including fractional scores."""
+
+    def score_line(self, raw):
+        out = render_contract_comment(review(score=raw))
+        return out.split("## Confidence Score\n", 1)[1].split("\n", 1)[0]
+
+    def test_just_below_a_threshold_drops_a_point(self):
+        self.assertEqual(self.score_line(89.99), "4/5")
+        self.assertEqual(self.score_line(9.99), "0/5")
+
+    def test_threshold_is_inclusive(self):
+        self.assertEqual(self.score_line(90), "5/5")
+        self.assertEqual(self.score_line(10), "1/5")
+
+    def test_every_band_edge(self):
+        for raw, expected in ((100, "5/5"), (70, "4/5"), (50, "3/5"), (30, "2/5"), (10, "1/5"), (0, "0/5")):
+            self.assertEqual(self.score_line(raw), expected, raw)

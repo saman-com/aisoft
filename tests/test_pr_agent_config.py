@@ -206,6 +206,15 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("github_action_config.pr_actions:", self.text)
         self.assertIn('"synchronize"', self.text)
 
+    def test_render_falls_back_to_a_failure_comment(self):
+        """A failed review must still post something the loop can read.
+
+        Otherwise the job just goes red and the loop waits for a review that
+        already failed.
+        """
+        self.assertIn("--failure", self.text)
+        self.assertIn("if: always()", self.text)
+
     def test_structured_output_is_requested(self):
         """Without the file sink the render step has nothing to read.
 
