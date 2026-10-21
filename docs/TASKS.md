@@ -87,7 +87,9 @@
 - [x] **T3.1** Determine Pi non-interactive invocation command
   `pi --print --no-session --approve < prompt.md` — `scripts/driver_pi.py`, documented in `AGENT.md`
 
-- [ ] **T3.2** Safe commit & push logic
+- [x] **T3.2** Safe commit & push logic
+  `scripts/driver_git.py` — explicit refspec, no force, remote ref verified after push;
+  refuses master and a branch Pi switched to; `NothingToPush` for a no-op
 
 - [ ] **T3.3** Wait for the re-review after push
 

@@ -109,6 +109,23 @@ environment variables take precedence.
 `tests/test_pr_agent_config.py` guards both halves: it asserts the branch variable
 is absent and that the workflow `env:` values match the TOML.
 
+### The push is explicit, verified, and never forced
+
+`scripts/driver_git.py` owns every write the loop makes to git. It refuses the
+default branch, refuses a branch that changed mid-run (Pi has a shell and can run
+`git checkout`), pushes an explicit refspec with no force flag, and reads
+`refs/remotes/origin/<branch>` back afterwards instead of trusting the exit status.
+
+A push that reports success but did not land would leave the loop waiting for a
+review of a commit that never arrived, so the verification is not optional. A
+force-push is never acceptable here: it rewrites a branch a human may have based
+work on, and a rejected push means the remote moved and a human needs to look.
+
+A clean tree whose head is already on the remote raises `NothingToPush` (exit 2),
+not success. Treating it as success burns an iteration re-triggering a review of
+unchanged code. A failed commit or push raises (exit 1) and names the local commit
+that did not reach the remote.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table
