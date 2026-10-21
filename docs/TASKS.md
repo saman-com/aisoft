@@ -125,7 +125,8 @@
   Success exit is `score == 5` **or** `score >= 4` with no P0/P1 issues in the
   Issues section, since the reviewer plateaus at 4/5 while listing only
   low-confidence findings (see PR #27). `scripts/driver_decision.py::decide`
-  returns `SUCCESS` / `CONTINUE` / `HUMAN` and prints one log line per path;
+  returns `SUCCESS` / `CONTINUE` / `HUMAN` (plus `REPEATED` from T4.3) and
+  prints one log line per path;
   `Review.is_clean` carries the rule so there is no second copy of it. Severity is
   read from `[P0]`/`[P1]`/`[P2]` tags, and an untagged or unknown tag blocks.
   Optional follow-up: tighten `extra_instructions` so only confirmed issues affect
