@@ -1,23 +1,16 @@
-
-text---
-
-### 2. `.pr_agent.toml`
-
-```toml
 # .pr_agent.toml
-# Forces PR-Agent to produce the exact format defined in CONTRACT.md
+# Forces PR-Agent to produce the exact format defined in docs/CONTRACT.md
 
 [config]
 # Change this to any OpenRouter model you prefer
-model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
-
+model = "openrouter/anthropic/claude-sonnet-4"
 
 [pr_reviewer]
 require_score_review = true
 require_risk_assessment = true
 require_merge_recommendation = true
 
-# This is the critical part – forces the exact three-section format
+# This is the critical part - forces the exact three-section format
 extra_instructions = """
 You must always end your review with these three sections in this exact order and with nothing after them:
 
@@ -25,7 +18,7 @@ You must always end your review with these three sections in this exact order an
 X/5
 
 ## Issues
-- [P0/P1/P2] path/to/file:line — short description
+- [P0/P1/P2] path/to/file:line - short description
 
 ## Agent Prompt
 A single, self-contained prompt that a coding agent can copy-paste to fix all the issues above.

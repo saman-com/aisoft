@@ -23,7 +23,7 @@
 ## Slice 0 – Foundation & Contracts
 **Exit criteria:** Repo has the correct files and a clear output contract. No runtime behavior required yet.
 
-- [ ] **T0.1** Create `.pr_agent.toml` with the exact output contract  
+- [x] **T0.1** Create `.pr_agent.toml` with the exact output contract  
   Force `## Confidence Score`, `## Issues`, `## Agent Prompt` format.
 
 - [ ] **T0.2** Document the parsing contract  
