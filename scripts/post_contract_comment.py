@@ -134,7 +134,10 @@ def resolve_author(fallback: str = "github-actions[bot]") -> str:
     """
     try:
         login = _gh("api", "user", "--jq", ".login").strip()
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
+        # CalledProcessError: the token cannot read its own user. OSError:
+        # `gh` is missing or not executable, which would otherwise escape as a
+        # traceback and skip the fallback this function promises.
         return fallback
     return login or fallback
 

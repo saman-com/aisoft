@@ -72,6 +72,15 @@ def _score_to_fifths(raw: object) -> int:
 LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$")
 
 
+def _parse_last_line(value: object) -> int:
+    """Read the end of a line range, as written, or 0 when there isn't one."""
+    match = LINE_RANGE.findall(str(value or "")) or []
+    if not match:
+        return _parse_line(value)
+    first, last = match[0]
+    return int(last or first)
+
+
 def _parse_line(value: object) -> int:
     """Read a line number as the model wrote it, or 0 when there isn't one.
 
@@ -93,17 +102,22 @@ def _parse_line(value: object) -> int:
 def _format_location(path: str, start_raw: object, end_raw: object) -> str:
     """Render `file:start-end`, tolerating a range written into one field.
 
-    A model can put `"42-50"` in `start_line` and leave `end_line` empty, or
-    write a range into both. Reading only the first integer from `start_line`
-    keeps the useful half of that instead of dropping the location entirely.
+    A model can put `"42-50"` in `start_line` and leave `end_line` empty, so the
+    first integer is read out of `start_line` rather than dropping the location
+    entirely. `end_line` may likewise carry a range; its last integer is the end.
+
+    A reversed range (`start=50, end=42`) is rendered as written rather than
+    collapsed. The Slice 2 parser reads the comment as the reviewed location, so
+    quietly turning an impossible range into a plausible single line would
+    misreport where the finding is.
     """
     start = _parse_line(start_raw)
-    end = _parse_line(end_raw)
+    end = _parse_last_line(end_raw)
     if not path:
         return "(no location)"
     if start < 1:
         return path
-    if end <= start:
+    if end < 1 or end == start:
         return f"{path}:{start}"
     return f"{path}:{start}-{end}"
 

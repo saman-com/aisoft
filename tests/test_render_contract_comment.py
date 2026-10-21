@@ -182,10 +182,10 @@ class IssuesTest(unittest.TestCase):
     def test_a_range_written_into_one_field_keeps_the_file_and_line(self):
         """A model may write "42-50" into start_line; dropping it loses the file.
 
-        The schema says int, but the value is model output. Reading the first
-        integer keeps a usable location instead of falling back to the bare file.
+        The schema says int, but the value is model output. Reading both ends out
+        of the range keeps a usable location instead of falling back to the file.
         """
-        self.assertEqual(self.location_for("42-50"), "a.py:42")
+        self.assertEqual(self.location_for("42-50"), "a.py:42-50")
 
     def test_a_numeric_string_line_is_accepted(self):
         self.assertEqual(self.location_for("42"), "a.py:42")
@@ -198,6 +198,16 @@ class IssuesTest(unittest.TestCase):
 
     def test_a_missing_file_is_labelled(self):
         self.assertEqual(self.location_for(42, path=""), "(no location)")
+
+    def test_a_reversed_range_is_rendered_as_written(self):
+        """Collapsing 50-42 into :50 would misreport where the finding is."""
+        self.assertEqual(self.location_for(50, 42), "a.py:50-42")
+
+    def test_a_range_in_the_end_field_uses_its_last_number(self):
+        self.assertEqual(self.location_for(42, "42-50"), "a.py:42-50")
+
+    def test_a_region_resolves_to_the_last_integer(self):
+        self.assertEqual(self.location_for("42-50", "60"), "a.py:42-60")
 
 
 class AgentPromptTest(unittest.TestCase):
