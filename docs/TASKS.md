@@ -68,7 +68,8 @@
 - [x] **T2.2** Implement PR detection (`gh` CLI)
   (`scripts/driver_pr.py` — `NoPullRequest` and `GhFailed` are distinct on purpose)
 
-- [ ] **T2.3** Implement comment polling / fetching
+- [x] **T2.3** Implement comment polling / fetching
+  (`scripts/driver_comments.py` — waits for a comment *newer than* the one already read)
 
 - [ ] **T2.4** Implement robust parser for the three sections
 
