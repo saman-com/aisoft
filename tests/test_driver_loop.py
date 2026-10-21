@@ -315,6 +315,21 @@ class MainTest(unittest.TestCase):
             driver_loop.main(["--pr", "31", "--repo", "owner/repo", "--dry-run"])
         self.assertTrue(seen["dry_run"])
 
+    def test_a_dry_run_says_nothing_was_attempted(self):
+        """A dry run always stops on "another attempt is due".
+
+        It changed nothing, so the verdict is honest and also misleading: read on
+        its own it looks like a run that stopped one attempt short. One line
+        before the status says no attempt was made.
+        """
+        loop = driver_loop.LoopResult(iterations=(result(Outcome.CONTINUE, 1),))
+        with mock.patch.object(driver_loop, "run_loop", return_value=loop), \
+             mock.patch.object(driver_loop.driver_log, "log") as logged:
+            driver_loop.main(["--pr", "31", "--repo", "owner/repo", "--dry-run"])
+        lines = [str(call.args[0]) for call in logged.call_args_list]
+        self.assertIn("no attempt was made", lines[0])
+        self.assertIn("NOT FINISHED", lines[-1])
+
     def test_an_iteration_past_the_limit_is_refused_before_any_cycle_runs(self):
         """`--iteration 6` must not start a run whose first cycle would refuse it.
 

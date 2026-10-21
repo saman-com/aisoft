@@ -230,6 +230,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    if args.dry_run:
+        # Said before the status, not after: the verdict is the line a reader
+        # stops on, and appending a note below it would bury it. A dry run always
+        # stops on "another attempt is due", because nothing was fixed, so this
+        # says plainly that no attempt ran.
+        driver_log.log("dry run: nothing was changed and no attempt was made.")
     announce(loop)
     return 0
 
