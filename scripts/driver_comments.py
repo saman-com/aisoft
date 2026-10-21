@@ -217,9 +217,14 @@ def is_fresh(found: Comment, baseline: Baseline | None) -> bool:
     # trailing newline, and that must not read as "the review was rewritten".
     if baseline.body is not None and _body_of(found) != _body_of(baseline):
         return True
-    if baseline.body is None and baseline.updated_at is None:
+    if baseline.body is None and not baseline.updated_at:
         return False  # an id-only baseline cannot see an edit
-    return baseline.updated_at is not None and found.updated_at != baseline.updated_at
+    # An empty `updated_at` is *unknown*, not a value: a `Comment` built without it
+    # (the dataclass default) would otherwise compare "" != "2026-..." and report
+    # an untouched comment as the new review, ending the wait immediately.
+    if not baseline.updated_at:
+        return False
+    return found.updated_at != baseline.updated_at
 
 
 def _body_of(value: Comment | Baseline) -> str:

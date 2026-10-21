@@ -220,6 +220,23 @@ class RewrittenCommentTest(unittest.TestCase):
                     sleep=lambda _seconds: None, clock=fake_clock(0, 1),
                 )
 
+    def test_an_empty_updated_at_is_unknown_not_a_change(self):
+        """`updated_at=""` means the caller did not know it, not "it changed".
+
+        A `Comment` built without `updated_at` (the dataclass default) made
+        `is_fresh` compare `"" != "2026-..."` and report an untouched comment as a
+        new review, which would end the wait on the review it was replacing.
+        """
+        stale = comment(4, body=BODY)
+        with mock.patch("driver_comments.list_comments", return_value=[stale]):
+            with self.assertRaises(ReviewTimeout):
+                wait_for_contract_comment(
+                    "owner/repo", 27,
+                    baseline=Comment(id=4, body=BODY, author="github-actions[bot]"),
+                    timeout=0, interval=0,
+                    sleep=lambda _seconds: None, clock=fake_clock(0, 1),
+                )
+
     def test_a_body_carried_through_a_shell_is_still_the_same_comment(self):
         """`$(cat before.md)` drops the trailing newline, and CRLF may differ."""
         stale = comment(4, body=BODY)
