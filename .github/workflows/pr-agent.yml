@@ -104,17 +104,26 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python3 scripts/render_contract_comment.py \
-            --jsonl pr-agent-output/review.jsonl \
-            --out contract-comment.md \
-          || python3 scripts/render_contract_comment.py --failure \
-            "PR-Agent produced no usable review; see $RUN_URL" \
-            --out contract-comment.md
+          set -o pipefail
+          reason="PR-Agent produced no usable review; see $RUN_URL"
+          if ! python3 scripts/render_contract_comment.py \
+                 --jsonl pr-agent-output/review.jsonl \
+                 --out contract-comment.md; then
+            echo "::warning::rendering the review failed; posting a 0/5 comment"
+            python3 scripts/render_contract_comment.py --failure "$reason" \
+              --out contract-comment.md \
+              || printf '## Confidence Score\n0/5\n\n## Issues\n- Review failed: %s\n\n## Agent Prompt\nDo not attempt a fix. Check the workflow run logs.\n' \
+                   "$reason" > contract-comment.md
+          fi
           echo "----- rendered comment -----"
           cat contract-comment.md
-          # Posting must happen even when rendering fell back, so the loop always
-          # gets an answer, and the job must still fail so the problem is visible.
-          if [ ! -s contract-comment.md ]; then exit 1; fi
+          # The loop must always get an answer, and the job must still fail so a
+          # broken review stays visible. An empty body means both rendering paths
+          # failed, which is not something to post as a review.
+          if [ ! -s contract-comment.md ]; then
+            echo "::error::no contract comment was produced"
+            exit 1
+          fi
 
       # `gh pr comment` appends, so this replaces any earlier contract comment
       # instead: one review comment per PR, however many times it is pushed to.

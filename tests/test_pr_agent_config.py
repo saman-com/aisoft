@@ -215,6 +215,14 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("--failure", self.text)
         self.assertIn("if: always()", self.text)
 
+    def test_render_failure_still_yields_a_comment_without_python(self):
+        """The inlined printf is the last resort when the renderer itself dies.
+
+        Without it an empty body reaches the post step, the loop gets no answer,
+        and nothing distinguishes that from a review still in flight.
+        """
+        self.assertIn("## Confidence Score\\n0/5", self.text)
+
     def test_structured_output_is_requested(self):
         """Without the file sink the render step has nothing to read.
 
