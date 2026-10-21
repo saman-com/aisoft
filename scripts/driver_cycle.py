@@ -59,6 +59,7 @@ from driver_comments import (
     list_comments,
     wait_for_contract_comment,
 )
+from driver_decision import Decision, Outcome, decide
 from driver_git import GitError, NothingToPush, PushResult, commit_and_push
 from driver_iteration import check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
@@ -85,6 +86,10 @@ class CycleResult:
     after_comment: Comment | None = None
     push: PushResult | None = None
     run: PiRun | None = field(default=None, repr=False)
+    # What the loop should do next, decided from the newest review it has. A dry
+    # run or an early stop leaves this decided from `before`, so the caller never
+    # has to re-derive the rule from the score.
+    decision: Decision | None = None
 
 
 def read_before(repo: str, pull_request: PullRequest, author: str) -> tuple[Review, Comment]:
@@ -139,22 +144,35 @@ def run_cycle(
             )
         )
 
+    # `iteration` here is the attempt about to run, and `decide` counts attempts
+    # already made. On attempt 5 that is four, so a fifth fix is still allowed;
+    # the five-attempt stop happens on the way out, once attempt 5 has a review.
+    # That also makes HUMAN unreachable here: `check_iteration` caps `iteration`
+    # at 5, so the count handed over is at most 4. Both stops are still handled
+    # by one branch rather than asserting the limit away, so loosening the guard
+    # cannot turn a give-up into another push.
+    decision = decide(before, iteration=iteration - 1, pr=pull_request.number)
+
     if dry_run:
         if not quiet:
             driver_log.log("dry run: reviewed and parsed, nothing changed.")
+            driver_log.log(f"would be: {decision.message}")
         return CycleResult(
             pr=pull_request, before=before, after=None,
             pi_ok=False, pushed=False, pi_ran=False,
-            before_comment=before_comment,
+            before_comment=before_comment, decision=decision,
         )
 
-    if before.is_clean:
+    if decision.outcome is not Outcome.CONTINUE:
+        # Nothing to fix, or nothing left to try. Either way Pi must not run: its
+        # prompt comes from a review the loop has already decided about.
         if not quiet:
-            driver_log.log("already 5/5 with no issues; nothing to fix.")
+            driver_log.log(decision.message)
         return CycleResult(
             pr=pull_request, before=before, after=before,
             pi_ok=True, pushed=False, pi_ran=False,
             before_comment=before_comment, after_comment=before_comment,
+            decision=decision,
         )
 
     if not quiet:
@@ -208,11 +226,16 @@ def run_cycle(
             )
         )
 
+    # Attempt N just finished, so this review is the one N attempts produced.
+    decision = decide(after, iteration=iteration, pr=pull_request.number)
+    if not quiet:
+        driver_log.log(decision.message)
+
     return CycleResult(
         pr=pull_request, before=before, after=after,
         pi_ok=True, pushed=True, pi_ran=True,
         before_comment=before_comment, after_comment=after_comment,
-        push=push, run=run,
+        push=push, run=run, decision=decision,
     )
 
 

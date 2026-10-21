@@ -47,11 +47,51 @@ BULLET = re.compile(r"^\s*[-*]\s+(?P<text>.+?)\s*$")
 # The single word that means "no issues", per CONTRACT.md.
 NO_ISSUES = {"none", "no issues", "no issues found", "n/a"}
 
+# An optional `[P0]` / `[P1]` / `[P2]` tag at the start of an issue bullet. The
+# tag is written by the reviewer, so it is read case-insensitively.
+SEVERITY_TAG = re.compile(r"^\s*\[(?P<tag>[^\]]{1,16})\]\s*")
+
+# The only severities whose presence is decided. Everything else, including a
+# bullet with no tag at all, is treated as blocking. Guessing that an
+# unrecognised tag means "cosmetic" is how a real bug ships.
+BLOCKING_SEVERITIES = frozenset({"P0", "P1"})
+NON_BLOCKING_SEVERITIES = frozenset({"P2"})
+
 FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 
 
 class ParseError(ValueError):
     """The comment does not satisfy the contract."""
+
+
+def severity_of(issue: str) -> str | None:
+    """The `P`-tag on an issue bullet, upper-cased, or None when there is none.
+
+    Returns whatever tag was written, which is not the same as "a severity this
+    module understands". `[P3]` and `[HIGH]` come back as `"P3"` and `"HIGH"`;
+    `is_blocking` is what decides how to read them.
+    """
+    match = SEVERITY_TAG.match(issue)
+    return match.group("tag").strip().upper() if match else None
+
+
+def is_blocking(issue: str) -> bool:
+    """True unless the bullet is explicitly tagged as cosmetic.
+
+    Only `[P2]` is non-blocking. A missing tag and an unknown tag both block:
+    the reviewer failing to say how bad a finding is does not make it safe, and
+    an unrecognised tag is more likely a format change than a downgrade.
+    """
+    return severity_of(issue) not in NON_BLOCKING_SEVERITIES
+
+
+# A score that needs no further work on its own, regardless of the issues listed.
+SUCCESS_SCORE = 5
+
+# The score at which a review with nothing blocking counts as done. The reviewer
+# plateaus here while listing low-confidence findings, so treating 4/5 as "keep
+# going" means paying Pi to chase findings the reviewer itself rated as minor.
+SUFFICIENT_SCORE = 4
 
 
 @dataclass(frozen=True)
@@ -61,8 +101,27 @@ class Review:
     agent_prompt: str
 
     @property
+    def blocking_issues(self) -> tuple[str, ...]:
+        """The issues the loop must still fix before a human merges."""
+        return tuple(issue for issue in self.issues if is_blocking(issue))
+
+    @property
+    def blocking_count(self) -> int:
+        return len(self.blocking_issues)
+
+    @property
     def is_clean(self) -> bool:
-        return self.score == 5 and not self.issues
+        """True when the review needs no further work, per docs/TASKS.md T4.2.
+
+            success <=> score == 5 or (score >= 4 and no P0/P1 issue)
+
+        This is the loop's real exit. `score == 5` alone is not it: the reviewer
+        settles at 4/5 while reporting only nits, and stopping there would mean
+        the loop could never finish on those PRs.
+        """
+        if self.score >= SUCCESS_SCORE:
+            return True
+        return self.score >= SUFFICIENT_SCORE and not self.blocking_issues
 
 
 def _split_sections(body: str) -> dict[str, str]:

@@ -169,6 +169,45 @@ them separate means changing the stopping rule cannot widen the hard cap.
 Exceeding the limit raises `IterationLimit` (a `DriverError`, exit 1): repeating
 the run unchanged will not help, and the message says a human is needed.
 
+### The loop stops at 5/5, or at 4/5 with nothing serious left
+
+`scripts/driver_decision.py::decide` owns the stopping rule and returns one of
+three outcomes. The cycle reads it and does nothing else about scoring:
+
+| Outcome | Condition | The cycle |
+|---|---|---|
+| `SUCCESS` | score 5, **or** score >= 4 with no blocking issue | stop, print ready for merge |
+| `CONTINUE` | not finished, and attempts made < 5 | run Pi, commit, push, wait |
+| `HUMAN` | not finished, and attempts made == 5 | stop, print human needed |
+
+The 4/5 half is not a relaxation of the bar, it is the case that happens. The
+reviewer plateaus at 4/5 while listing findings it rates as minor (PR #27); a
+loop that only accepts 5/5 can never finish on those PRs, spends all five
+attempts and reports failure on a branch that is fine.
+
+**Blocking is decided by the `[P0]`/`[P1]`/`[P2]` tag** on each Issues bullet,
+read by `parse_contract_comment.py::is_blocking` next to the parser. `[P0]` and
+`[P1]` block; `[P2]` does not. A bullet with no tag, or with a tag the contract
+does not define, blocks: the reviewer failing to state a severity is not evidence
+that the finding is safe, and an unknown tag is more likely a format change than
+a downgrade. An empty Issues section is no blocking issues, which is why the
+plateau case exits cleanly.
+
+**`iteration` counts attempts already made, not the one about to run.** The cycle
+asks about `N - 1` on the way in, so attempt 5 still runs, and about `N` on the
+way out, when attempt 5's review is what the limit applies to. Reading it the
+other way makes the fifth attempt a no-op and caps the loop at four fixes.
+`tests/test_driver_cycle.py::DecisionTest` pins both directions.
+
+**The renderer cannot emit these tags yet.** PR-Agent's review schema has no
+severity field, so `scripts/render_contract_comment.py` writes every bullet
+untagged and on a real PR every finding blocks. That costs nothing on the case
+that actually occurs (4/5 with an empty Issues section still succeeds), but the
+"4/5 with only nits" exit stays dormant until a severity reaches the comment.
+Fixing that is a CONTRACT.md change, which requires the renderer, `.pr_agent.toml`
+and the parser to move together. `tests/test_severity_roundtrip.py` records the
+gap and is the test that should fail first when it is closed.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table

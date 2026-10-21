@@ -121,11 +121,19 @@
   a sixth push cannot land. Logs show `iteration N/5`. `driver_cycle.run_cycle`
   calls it first.
 
-- [ ] **T4.2** Implement decision logic (score == 5 → stop, else fix, else give up)
+- [x] **T4.2** Implement decision logic (score == 5 → stop, else fix, else give up)
   Success exit is `score == 5` **or** `score >= 4` with no P0/P1 issues in the
   Issues section, since the reviewer plateaus at 4/5 while listing only
-  low-confidence findings (see PR #27). Optional follow-up: tighten
-  `extra_instructions` so only confirmed issues affect the score.
+  low-confidence findings (see PR #27). `scripts/driver_decision.py::decide`
+  returns `SUCCESS` / `CONTINUE` / `HUMAN` and prints one log line per path;
+  `Review.is_clean` carries the rule so there is no second copy of it. Severity is
+  read from `[P0]`/`[P1]`/`[P2]` tags, and an untagged or unknown tag blocks.
+  Optional follow-up: tighten `extra_instructions` so only confirmed issues affect
+  the score.
+
+  _Known gap: the renderer emits no severity tags, because PR-Agent's schema has
+  none. The 4/5-with-only-nits exit is therefore unreachable on a real PR until
+  the contract gains a severity. Recorded in `tests/test_severity_roundtrip.py`._
 
 - [ ] **T4.3** (Optional) Light repeated-issue detection
 
