@@ -21,7 +21,12 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
 
-from post_contract_comment import _split_json_arrays, main, pick_contract_comment  # noqa: E402
+from post_contract_comment import (  # noqa: E402
+    CommentError,
+    _split_json_arrays,
+    main,
+    pick_contract_comment,
+)
 
 BOT = "github-actions[bot]"
 
@@ -112,6 +117,19 @@ class SplitJsonTest(unittest.TestCase):
 
     def test_empty_output_is_no_pages(self):
         self.assertEqual(_split_json_arrays(""), [])
+
+    def test_noise_between_pages_keeps_the_later_page(self):
+        """Dropping a page could hide the existing comment and post a duplicate."""
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            chunks = _split_json_arrays('[{"a":1}]\nwarning: x\n[{"b":2}]')
+        self.assertEqual(chunks, [[{"a": 1}], [{"b": 2}]])
+
+    def test_output_with_no_arrays_at_all_is_an_error(self):
+        """An empty list reads as "nothing posted yet" and would duplicate."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(CommentError):
+                _split_json_arrays("error: not logged in\n")
 
 
 class MainTest(unittest.TestCase):

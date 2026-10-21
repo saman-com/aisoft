@@ -26,6 +26,10 @@ import sys
 CONTRACT_HEADER = "## Confidence Score"
 
 
+class CommentError(RuntimeError):
+    """The comment list could not be read, so posting is unsafe."""
+
+
 def _login(comment: dict) -> str:
     user = comment.get("user") or {}
     return str(user.get("login") or "")
@@ -118,13 +122,19 @@ def list_comments(repo: str, pr: int) -> list[dict]:
 def _split_json_arrays(out: str) -> list[list[dict]]:
     """Parse the JSON arrays `gh api --paginate` concatenates.
 
-    Only whole arrays are read, and parsing stops at the first thing that is not
-    one. `gh` can print a warning to stdout alongside the payload, and letting
-    that raise JSONDecodeError would turn a readable comment list into a
-    traceback; the comments found so far are enough to decide what to post.
+    `gh` can print a warning to stdout alongside the payload. Skipping the line
+    it sits on and carrying on keeps the remaining pages, which matters here:
+    dropping a later page could hide an existing contract comment and make this
+    script post a duplicate. A whole-output abort would do the same, so unknown
+    text is skipped rather than fatal.
+
+    Raises when there was output but no array could be read at all - an empty
+    comment list looks exactly like "nothing posted yet", which is the one wrong
+    answer this function must not give.
     """
     decoder = json.JSONDecoder()
     chunks: list[list[dict]] = []
+    skipped = False
     index = 0
     while index < len(out):
         while index < len(out) and out[index] in " \t\r\n":
@@ -134,10 +144,20 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
         try:
             value, index = decoder.raw_decode(out, index)
         except json.JSONDecodeError:
-            print("warning: ignoring unparseable output from gh api", file=sys.stderr)
-            break
+            # Skip the rest of this line and try the next one.
+            newline = out.find("\n", index)
+            if newline < 0:
+                break
+            index = newline + 1
+            skipped = True
+            continue
         if isinstance(value, list):
             chunks.append(value)
+
+    if skipped:
+        print("warning: ignored unparseable lines in the gh api output", file=sys.stderr)
+    if not chunks and out.strip():
+        raise CommentError("could not parse the comment list from gh api")
     return chunks
 
 
@@ -218,6 +238,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         print(post(repo, args.pr, body, author))
+    except CommentError as error:
+        # Posting blind would create a duplicate, so this is a failure, not a
+        # reason to carry on with an empty comment list.
+        print(f"error: {error}", file=sys.stderr)
+        return 1
     except subprocess.CalledProcessError as error:
         print(f"error: gh {' '.join(str(a) for a in error.cmd[1:])} failed: {error.stderr}", file=sys.stderr)
         return 1
