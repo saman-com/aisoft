@@ -32,7 +32,7 @@
 - [x] **T0.3** Create empty GitHub Action skeleton  
   `.github/workflows/pr-agent.yml` that triggers on pull_request but does nothing yet.
 
-- [ ] **T0.4** Document required secrets  
+- [x] **T0.4** Document required secrets  
   Note that `OPENROUTER_API_KEY` must be added in GitHub Secrets.
 
 **Slice 0 complete when:** All four tasks above are checked and the files exist.
