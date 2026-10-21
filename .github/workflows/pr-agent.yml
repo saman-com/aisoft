@@ -111,9 +111,11 @@ jobs:
         run: |
           set -o pipefail
           reason="PR-Agent produced no usable review; see $RUN_URL"
+          rendered=1
           if ! python3 scripts/render_contract_comment.py \
                  --jsonl pr-agent-output/review.jsonl \
                  --out contract-comment.md; then
+            rendered=0
             echo "::warning::rendering the review failed; posting a 0/5 comment"
             python3 scripts/render_contract_comment.py --failure "$reason" \
               --out contract-comment.md \
@@ -122,11 +124,16 @@ jobs:
           fi
           echo "----- rendered comment -----"
           cat contract-comment.md
-          # The loop must always get an answer, and the job must still fail so a
-          # broken review stays visible. An empty body means both rendering paths
-          # failed, which is not something to post as a review.
+          # The loop must always get an answer, but a failed review must not look
+          # like a successful run: the comment is posted, then this step fails.
+          # An empty body means every rendering path failed, which is not
+          # something to post as a review at all.
           if [ ! -s contract-comment.md ]; then
             echo "::error::no contract comment was produced"
+            exit 1
+          fi
+          if [ "$rendered" -eq 0 ]; then
+            echo "::error::the review could not be rendered; a 0/5 comment was posted"
             exit 1
           fi
 
