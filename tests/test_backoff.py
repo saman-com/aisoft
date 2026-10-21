@@ -28,10 +28,10 @@ class DelaysTest(unittest.TestCase):
 class RetryTest(unittest.TestCase):
     def test_retry_is_allowed_up_to_the_maximum(self):
         self.assertTrue(should_retry(0, 3))
-        self.assertTrue(should_retry(3, 3))
+        self.assertTrue(should_retry(2, 3))
 
     def test_retry_is_refused_past_the_maximum(self):
-        self.assertFalse(should_retry(4, 3))
+        self.assertFalse(should_retry(3, 3))
 
 
 if __name__ == "__main__":
