@@ -121,14 +121,19 @@ def run_loop(
     author: str | None = None,
     pi_timeout: float = PI_DEFAULT_TIMEOUT,
     quiet: bool = False,
-    cycle: Callable[..., CycleResult] = run_cycle,
+    cycle: Callable[..., CycleResult] | None = None,
 ) -> LoopResult:
     """Run cycles until the rule says stop. Raises rather than half-finishing.
 
     `cycle` is the one seam: it defaults to the real `run_cycle`, and tests pass a
     scripted stand-in so the repetition can be checked without Pi or gh. Every
     keyword other than `iteration` is passed through to it unchanged.
+
+    The default is resolved here rather than in the signature. A `= run_cycle`
+    default would be bound when this module is imported, so replacing
+    `driver_loop.run_cycle` to test the seam would silently have no effect.
     """
+    perform = cycle if cycle is not None else run_cycle
     check_iteration(start_iteration)
     if not quiet:
         driver_log.log(
@@ -152,7 +157,22 @@ def run_loop(
     iterations: list[CycleResult] = []
     iteration = start_iteration
     while True:
-        result = cycle(iteration=iteration, **extra)
+        try:
+            result = perform(iteration=iteration, **extra)
+        except NothingToPush as error:
+            # Pi ran and changed nothing, so there is no push and no review will
+            # ever be written about it. Waiting would poll for a review of a
+            # commit that does not exist until `timeout`, so the loop stops here.
+            #
+            # It is not "nothing to do", which is what exit 2 says elsewhere: the
+            # branch was handed a finding, an attempt was spent, and the attempt
+            # produced no diff. That needs a person, and it needs the number of
+            # the attempt that stalled.
+            raise LoopError(
+                f"{describe_iteration(iteration)} changed nothing, so nothing was "
+                "pushed and no review will follow. Pi did not edit the code the "
+                "review pointed at; a human needs to look at this."
+            ) from error
         iterations.append(result)
         if not quiet:
             driver_log.log(f"{describe_iteration(iteration)}: {summarize(result)}")
@@ -223,7 +243,12 @@ def main(argv: list[str] | None = None) -> int:
     except ParseError as error:
         print(f"error: {error}", file=sys.stderr)
         return 3
-    except (NoPullRequest, NoReview, ReviewTimeout, NothingToPush) as error:
+    except (NoPullRequest, NoReview, ReviewTimeout) as error:
+        # Nothing to do: no PR, no review yet, or no review arrived in time. These
+        # are states of the world, not failures of the run, so they keep exit 2.
+        # `NothingToPush` is deliberately absent: the loop turns it into a
+        # `LoopError` (exit 1) because a spent attempt that produced no diff is
+        # not "nothing to do".
         print(f"error: {error}", file=sys.stderr)
         return 2
     except (GhFailed, PiError, GitError, IterationLimit, LoopError, DriverError) as error:

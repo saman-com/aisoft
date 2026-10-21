@@ -243,6 +243,40 @@ class PrintingTest(unittest.TestCase):
             driver_loop.run_loop(repo="owner/repo", cycle=lambda **_kw: empty)
 
 
+class StallTest(unittest.TestCase):
+    def test_a_cycle_that_changed_nothing_ends_the_loop(self):
+        """Pi ran, edited nothing, so there is no push and no review to wait for.
+
+        Waiting would poll for 600s for a review of a commit that does not exist.
+        """
+        script = Script([Outcome.CONTINUE])
+
+        def cycle(**kwargs):
+            script.asked.append(kwargs["iteration"])
+            raise NothingToPush("nothing to push")
+
+        with self.assertRaises(driver_loop.LoopError) as caught:
+            driver_loop.run_loop(repo="owner/repo", cycle=cycle)
+        self.assertIn("changed nothing", str(caught.exception))
+        self.assertEqual(script.asked, [1])
+
+    def test_a_stall_is_not_reported_as_nothing_to_do(self):
+        """Exit 2 means "no PR / no review / timed out", and this is none of them.
+
+        The run spent an attempt on a real finding and got no diff, which a person
+        has to look at. Reporting it as "nothing to do" would file it with the
+        cases where running again later is the right answer.
+        """
+
+        def cycle(**_kwargs):
+            raise NothingToPush("nothing to push")
+
+        with mock.patch.object(driver_loop, "run_cycle", side_effect=cycle), \
+             mock.patch.object(driver_loop.driver_log, "log"):
+            code = driver_loop.main(["--pr", "31", "--repo", "owner/repo"])
+        self.assertEqual(code, 1)
+
+
 class MainTest(unittest.TestCase):
     def run_main(self, loop_result=None, error=None, argv=None):
         calls = {"count": 0}
@@ -276,9 +310,30 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(calls["count"], 1)
 
-    def test_a_nothing_to_push_exits_two(self):
-        code, _, _, _ = self.run_main(error=NothingToPush("nothing to push"))
-        self.assertEqual(code, 2)
+    def test_a_crash_mid_loop_still_logs_the_attempts_that_ran(self):
+        """A crash on attempt 3 must not lose the record of 1 and 2.
+
+        Each attempt is logged as it finishes rather than collected and printed
+        at the end, so a run that dies halfway still explains what it did. The
+        evidence a failed run is judged on is exactly those lines.
+        """
+        attempts = {"count": 0}
+
+        def cycle(**_kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 3:
+                raise PiError("pi exploded on attempt 3")
+            return result(Outcome.CONTINUE, attempts["count"])
+
+        with mock.patch.object(driver_loop, "run_cycle", side_effect=cycle), \
+             mock.patch.object(driver_loop.driver_log, "log") as logged:
+            code = driver_loop.main(["--pr", "31", "--repo", "owner/repo"])
+        lines = [str(call.args[0]) for call in logged.call_args_list]
+        self.assertEqual(code, 1)
+        self.assertTrue(any("iteration 1/5:" in line for line in lines))
+        self.assertTrue(any("iteration 2/5:" in line for line in lines))
+        self.assertFalse(any("iteration 3/5:" in line for line in lines))
+        self.assertFalse(any("READY FOR MERGE" in line for line in lines))
 
     def test_a_pi_failure_exits_one(self):
         code, _, _, _ = self.run_main(error=PiError("pi exploded"))
