@@ -11,7 +11,7 @@
 
 ## Progress Overview
 
-- [ ] **Slice 0** – Foundation & Contracts
+- [x] **Slice 0** – Foundation & Contracts
 - [ ] **Slice 1** – PR-Agent Review Only
 - [ ] **Slice 2** – Local Parser (Read-Only)
 - [ ] **Slice 3** – Single Fix Cycle
