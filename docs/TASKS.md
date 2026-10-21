@@ -47,7 +47,10 @@
 - [x] **T1.2** Configure model and review flags  
   (`require_score_review`, risk assessment, merge recommendation)
 
-- [ ] **T1.3** Force structured output format via `extra_instructions`
+- [x] **T1.3** Force structured output format
+  (PR-Agent builds its comment in Python, so the contract sections are rendered
+  by `scripts/render_contract_comment.py` from the structured review and posted
+  by the workflow — see CONTRACT.md)
 
 - [ ] **T1.4** Manual validation  
   Open a test PR and confirm the comment matches the contract. Attach example output.

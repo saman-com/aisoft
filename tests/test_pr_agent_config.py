@@ -32,6 +32,30 @@ class ReviewFlagsTest(unittest.TestCase):
         self.assertIs(self.config.get("require_merge_recommendation"), True)
 
 
+class PublishTargetTest(unittest.TestCase):
+    """PR-Agent must not post a table comment next to our contract comment.
+
+    ``config.publish_output`` cannot be turned off to achieve that: PR-Agent
+    gates ``push_outputs`` - the file sink that hands us the structured review
+    - on that same flag. Publishing to a check run instead keeps the review
+    running and the structured output flowing while leaving the conversation
+    to the contract comment.
+    """
+
+    def setUp(self):
+        self.config = load_config()
+
+    def test_review_is_not_published_as_a_comment(self):
+        self.assertIs(self.config.get("github", {}).get("publish_as_check_run"), True)
+
+    def test_publish_output_stays_enabled_for_the_structured_output(self):
+        self.assertIsNot(
+            self.config.get("config", {}).get("publish_output"),
+            False,
+            "disabling publish_output also disables the push_outputs file sink",
+        )
+
+
 class ModelTest(unittest.TestCase):
     """Every model the reviewer can reach must be an OpenRouter model.
 

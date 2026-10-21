@@ -1,29 +1,55 @@
 # CONTRACT.md – PR-Agent Output Contract
 
-This document defines the exact format that PR-Agent must produce and that the local driver must parse.
+This document defines the exact comment format the loop parses.
 
-Any change to this contract requires updating both:
+Any change to this contract requires updating all three:
+
+- `scripts/render_contract_comment.py` (produces the comment)
 - `.pr_agent.toml` (the instructions given to PR-Agent)
-- The local parser (Slice 2+)
+- The parser (Slice 2+)
+
+---
+
+## Who renders the comment
+
+The three sections are **not** produced by the model. PR-Agent assembles its
+review comment in Python (`convert_to_markdown_v2` in `pr_agent/algo/utils.py`),
+which reshapes the model's output into a GFM table, so `##` headings requested
+via `extra_instructions` never reach GitHub.
+
+The workflow therefore takes the structured review PR-Agent emits, renders the
+contract comment from it, and posts that:
+
+```
+.pr_agent.toml      -> model emits score + key_issues_to_review + agent_prompt
+push_outputs (file) -> pr-agent-output/review.jsonl
+scripts/render_contract_comment.py -> contract-comment.md
+gh pr comment       -> the only review comment on the PR
+```
+
+The model's own prose stays out of the comment, which makes the format a
+property of code we test rather than of model behaviour. PR-Agent's review is
+published as a check run instead of a comment (`github.publish_as_check_run`),
+because switching it off entirely would also switch off `push_outputs`.
 
 ---
 
 ## Required Output Structure
 
-PR-Agent **must** end every review comment with these three sections, in this exact order, and with nothing after the last section:
+Every contract comment consists of these three sections, in this order, with
+nothing after the last one:
 
 ```markdown
 ## Confidence Score
 X/5
 
 ## Issues
-- [P0/P1/P2] path/to/file:line — short description of the issue
-- [P1] another/file.ts:88 — another issue
+- path/to/file.py:42-50 — Missing timeout: The poll loop never times out.
+- another/file.ts:88 — Off-by-one: The loop skips the last element.
 
 ## Agent Prompt
 A single, self-contained prompt that a coding agent can copy-paste.
 It must include concrete file paths and clear instructions on how to fix all the issues listed above.
-Do not add any text after this section.
 ```
 
 ### Section rules
@@ -31,11 +57,37 @@ Do not add any text after this section.
 | Section | Header | Body |
 |---|---|---|
 | 1 | `## Confidence Score` | A single line `X/5` where `X` is an integer 0–5. |
-| 2 | `## Issues` | Zero or more Markdown bullet lines, each starting with `- [P0]`, `- [P1]` or `- [P2]`. |
+| 2 | `## Issues` | Zero or more bullets, or the single line `None`. |
 | 3 | `## Agent Prompt` | Free-form text, everything until the end of the comment. May be several paragraphs. |
 
-Anything before the first header is allowed (PR-Agent may print a summary); the
-parser only cares about the three sections.
+An issue bullet is `- <location> — <issue header>: <one-sentence description>`,
+where the location is `file`, `file:line`, or `file:start-end`. A finding with
+no usable line number falls back to the bare path.
+
+### Score scale
+
+The model scores a PR from 0 to 100, which is PR-Agent's schema. The renderer
+converts that to fifths, so the loop only ever compares one scale:
+
+| PR-Agent score | Contract score |
+|---|---|
+| 90–100 | 5/5 |
+| 70–89 | 4/5 |
+| 50–69 | 3/5 |
+| 30–49 | 2/5 |
+| 10–29 | 1/5 |
+| 0–9 | 0/5 |
+
+A score outside 0–100 is a contract violation, not a clamp.
+
+### Agent Prompt
+
+PR-Agent's review schema has no `agent_prompt` field, so the renderer asks the
+model for one through `extra_instructions`. When the model omits it, the
+renderer builds a deterministic prompt from the findings rather than failing:
+model-side omissions are expected, and a stalled loop is worse than a derived
+prompt. It fails only when there is neither a prompt nor any finding, since
+then there is nothing to hand an agent.
 
 ---
 

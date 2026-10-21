@@ -7,33 +7,39 @@ model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 # PR-Agent ships a non-OpenRouter fallback (gpt-5.6-terra); pin ours to
 # OpenRouter too so a primary-model hiccup never needs an OpenAI key.
 fallback_models = ["openrouter/deepseek/deepseek-v4.1-flash"]
+# The contract comment is rendered by scripts/render_contract_comment.py and
+# posted by the workflow. PR-Agent still computes the review (that is how the
+# structured output is produced), but its own rendering must not become a
+# second, table-shaped PR comment next to ours.
+#
+# It cannot simply be switched off: `push_outputs`, which hands us the
+# structured review, is itself gated on `config.publish_output`. Publishing to
+# an ordinary comment is what gets disabled instead.
+[github]
+publish_as_check_run = true
 
 [pr_reviewer]
 require_score_review = true
 require_risk_assessment = true
 require_merge_recommendation = true
 
-# This is the critical part - forces the exact three-section format
+# The three sections cannot be produced here. PR-Agent assembles the review
+# comment in Python (convert_to_markdown_v2), so the model's headings are
+# reshaped into a GFM table before they reach GitHub. These instructions
+# therefore cover only what the model does control: the score scale, the
+# finding shape, and the agent prompt it must emit as `agent_prompt`.
 extra_instructions = """
-You must always end your review with these three sections in this exact order and with nothing after them:
+Score this PR from 0 to 100, where 90-100 means ready to merge with no important
+issues, 70-89 means only minor polish is left, 50-69 means real issues that
+should be fixed, and below 50 means significant problems.
 
-## Confidence Score
-X/5
+Only report real bugs, security issues, or clear correctness problems as key
+issues. Give every key issue a concrete file, line range, and a one-sentence
+description of the failure scenario. Do not report style nits unless they cause
+a defect.
 
-## Issues
-- [P0/P1/P2] path/to/file:line - short description
-
-## Agent Prompt
-A single, self-contained prompt that a coding agent can copy-paste to fix all the issues above.
-Include concrete file paths and clear, actionable instructions.
-Do not add any text after the Agent Prompt section.
-
-Rules for the score:
-- 5/5 = ready to merge, no important issues
-- 4/5 = only minor polish needed
-- 3/5 = real issues that should be fixed
-- 2/5 or lower = significant problems
-
-Only list real bugs, security issues, or clear correctness problems in the Issues section.
-Do not list pure style nits unless they are severe.
+Also fill the `agent_prompt` field with a single self-contained prompt that a
+coding agent can follow to fix every issue you listed. Name the files and lines
+to change and say what the fix is. Write it in plain prose, not as a list of
+headings: the surrounding report format is added automatically.
 """

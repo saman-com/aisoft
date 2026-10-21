@@ -4,15 +4,16 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# PR-Agent reads the diff through the GitHub API and posts a review comment,
-# so it needs read access to the repo and write access to the PR.
+# PR-Agent reads the diff through the GitHub API; the contract comment is
+# posted with `gh` in the last step, so write access to the PR is needed.
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: write
 
 # One review at a time per PR. A new push cancels the review of the previous
-# head, which is what we want: the parser polls for the latest review.
+# head, which is what we want: the loop polls for the latest review.
 concurrency:
   group: pr-agent-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -21,21 +22,46 @@ jobs:
   pr-agent:
     name: PR-Agent review
     runs-on: ubuntu-latest
-    # Never review PRs opened by PR-Agent's own bot account, and never try to
-    # review from forks where the OpenRouter secret is unavailable.
+    # Never review PRs opened by a bot, and never try to review from forks where
+    # the OpenRouter secret is unavailable.
     if: >-
       github.event.sender.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - name: Run PR-Agent
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # PR-Agent renders its own review as a GFM table, so its headings can
+      # never match CONTRACT.md. It is configured (.pr_agent.toml) to publish
+      # to a check run instead of a comment, and to hand the structured review
+      # to the next step through the push_outputs file sink.
+      - name: Run PR-Agent (structured review only)
         uses: the-pr-agent/pr-agent@v0.48.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PR-Agent reads OpenRouter credentials from OPENROUTER__KEY
-          # (the [openrouter] key in its secrets template). GitHub stores the
-          # value as OPENROUTER_API_KEY - see README.md.
+          # PR-Agent reads OpenRouter credentials from OPENROUTER__KEY.
+          # GitHub stores the value as OPENROUTER_API_KEY - see README.md.
           OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Model and review flags come from .pr_agent.toml at the repo root.
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
+          # push_outputs is host-only configuration: a repository's
+          # .pr_agent.toml cannot enable it, so it is set here, where the
+          # workflow counts as the host.
+          PUSH_OUTPUTS__ENABLE: "true"
+          PUSH_OUTPUTS__CHANNELS: '["file"]'
+          PUSH_OUTPUTS__FILE_PATH: pr-agent-output/review.jsonl
+
+      - name: Render the contract comment
+        run: |
+          python3 scripts/render_contract_comment.py \
+            --jsonl pr-agent-output/review.jsonl \
+            --out contract-comment.md
+          echo "----- rendered comment -----"
+          cat contract-comment.md
+
+      - name: Post the contract comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file contract-comment.md
