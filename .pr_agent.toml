@@ -20,10 +20,20 @@ custom_model_max_tokens = 1048576
 # 10m20s with finish_reason "length" and an empty body, so the review always
 # fell through to the fallback model. A review comment needs far less than this.
 max_output_tokens = 8000
-# Reasoning was the cause of the overrun: with the default effort and no token
-# cap the model reasoned through the entire completion budget before writing
-# anything. Reviews are diff-reading, not multi-step deduction.
+# Reasoning was the cause of the overrun: the model reasons by default and spent
+# the entire completion budget before writing anything, so the response came
+# back empty with finish_reason "length".
 reasoning_effort = "low"
+# reasoning_effort alone does nothing here. PR-Agent only forwards it after
+# litellm confirms the model is reasoning-capable, and litellm has no entry for
+# this OpenRouter alias, so no reasoning object was ever sent and the model kept
+# its default effort (verified: no "Adding OpenRouter reasoning" line in the
+# run logs). This list is PR-Agent's documented escape hatch for models litellm
+# does not know.
+additional_reasoning_effort_models = [
+    "deepseek/deepseek-v4.1-flash-1017",
+    "deepseek/deepseek-v4.1-flash",
+]
 # The contract comment is rendered by scripts/render_contract_comment.py and
 # posted by the workflow. PR-Agent still computes the review (that is how the
 # structured output is produced), but its own rendering must not become a

@@ -94,6 +94,20 @@ class ModelTest(unittest.TestCase):
         """The default "medium" is what consumed the uncapped budget."""
         self.assertIn(self.config.get("reasoning_effort"), {"none", "minimal", "low"})
 
+    def test_reasoning_effort_is_registered_for_every_model(self):
+        """reasoning_effort is ignored unless the model is registered.
+
+        PR-Agent forwards the effort only after litellm reports the model as
+        reasoning-capable, and litellm has no entry for this OpenRouter alias.
+        Setting reasoning_effort without listing the model here does nothing:
+        the run logs showed no "Adding OpenRouter reasoning" line and the model
+        kept its default effort.
+        """
+        registered = self.config.get("additional_reasoning_effort_models", [])
+        models = [self.config["model"], *self.config.get("fallback_models", [])]
+        for model in models:
+            self.assertIn(model.removeprefix("openrouter/"), registered, model)
+
     def test_custom_model_max_tokens_is_set(self):
         """PR-Agent must have a token budget for our OpenRouter alias.
 
