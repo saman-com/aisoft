@@ -4,33 +4,78 @@
 [config]
 # Change this to any OpenRouter model you prefer
 model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
+# PR-Agent ships a non-OpenRouter fallback (gpt-5.6-terra); pin ours to
+# OpenRouter too so a primary-model hiccup never needs an OpenAI key.
+fallback_models = ["openrouter/deepseek/deepseek-v4.1-flash"]
+# PR-Agent resolves a model's context window from its own MAX_TOKENS table, then
+# from litellm. Neither knows this OpenRouter alias, and without a budget the
+# review fails outright before any model call:
+#   ERROR pr_agent.algo.token_budget:get_max_tokens:161 - Model
+#   openrouter/deepseek/deepseek-v4.1-flash-1017 is not defined in MAX_TOKENS ...
+# 1048576 is the model's real context length; config.max_model_tokens (32000)
+# still caps the input PR-Agent actually sends.
+custom_model_max_tokens = 1048576
+# Cap the completion. Without this the provider's own ceiling applies (393216
+# for this model), and the model spends the whole budget: runs took 8m20s and
+# 10m20s with finish_reason "length" and an empty body, so the review always
+# fell through to the fallback model. A review comment needs far less than this.
+max_output_tokens = 8000
+# Reasoning is the cause of the overrun: the model reasons by default and spends
+# the entire completion budget before writing anything, so the response comes
+# back empty with finish_reason "length". "low" still used up the whole 8000
+# tokens, so reasoning is turned off for reviews altogether.
+reasoning_effort = "none"
+# reasoning_effort alone does nothing here. PR-Agent only forwards it after
+# litellm confirms the model is reasoning-capable, and litellm has no entry for
+# this OpenRouter alias, so no reasoning object was ever sent and the model kept
+# its default effort (verified: no "Adding OpenRouter reasoning" line in the
+# run logs). This list is PR-Agent's documented escape hatch for models litellm
+# does not know.
+additional_reasoning_effort_models = [
+    "deepseek/deepseek-v4.1-flash-1017",
+    "deepseek/deepseek-v4.1-flash",
+]
+# The contract comment is rendered by scripts/render_contract_comment.py and
+# posted by the workflow. PR-Agent still computes the review (that is how the
+# structured output is produced), but its own rendering must not become a
+# second, table-shaped PR comment next to ours.
+#
+# It cannot simply be switched off: `push_outputs`, which hands us the
+# structured review, is itself gated on `config.publish_output`. Publishing to
+# an ordinary comment is what gets disabled instead.
+[github]
+publish_as_check_run = true
 
 [pr_reviewer]
 require_score_review = true
 require_risk_assessment = true
 require_merge_recommendation = true
 
-# This is the critical part - forces the exact three-section format
+# The three sections cannot be produced here. PR-Agent assembles the review
+# comment in Python (convert_to_markdown_v2), so the model's headings are
+# reshaped into a GFM table before they reach GitHub. These instructions
+# therefore cover only what the model does control: the score scale, the
+# finding shape, and the agent prompt it must emit as `agent_prompt`.
 extra_instructions = """
-You must always end your review with these three sections in this exact order and with nothing after them:
+Score this PR from 0 to 100, where 90-100 means ready to merge with no important
+issues, 70-89 means only minor polish is left, 50-69 means real issues that
+should be fixed, and below 50 means significant problems.
 
-## Confidence Score
-X/5
+Only report real bugs, security issues, or clear correctness problems as key
+issues. Give every key issue a concrete file, line range, and a one-sentence
+description of the failure scenario. Do not report style nits unless they cause
+a defect.
 
-## Issues
-- [P0/P1/P2] path/to/file:line - short description
+A finding must name a specific input or sequence of events that makes the code
+behave wrongly. If you cannot name one, do not report it. In particular, never
+report something you describe as low risk, low confidence, unlikely, a possible
+issue, or as something the author should "confirm" or "verify" - if the outcome
+depends on facts you cannot check, it is not a finding. Do not report the absence
+of a test unless you can point to a specific wrong behaviour the test would have
+caught. Do not restate a deliberate, documented trade-off as an issue.
 
-## Agent Prompt
-A single, self-contained prompt that a coding agent can copy-paste to fix all the issues above.
-Include concrete file paths and clear, actionable instructions.
-Do not add any text after the Agent Prompt section.
-
-Rules for the score:
-- 5/5 = ready to merge, no important issues
-- 4/5 = only minor polish needed
-- 3/5 = real issues that should be fixed
-- 2/5 or lower = significant problems
-
-Only list real bugs, security issues, or clear correctness problems in the Issues section.
-Do not list pure style nits unless they are severe.
+Also fill the `agent_prompt` field with a single self-contained prompt that a
+coding agent can follow to fix every issue you listed. Name the files and lines
+to change and say what the fix is. Write it in plain prose, not as a list of
+headings: the surrounding report format is added automatically.
 """

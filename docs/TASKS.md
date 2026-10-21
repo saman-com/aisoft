@@ -42,14 +42,17 @@
 ## Slice 1 – PR-Agent Review Only
 **Exit criteria:** Opening or pushing to a PR automatically produces a structured review comment containing Score / Issues / Agent Prompt.
 
-- [ ] **T1.1** Implement real GitHub Action with PR-Agent + OpenRouter
+- [x] **T1.1** Implement real GitHub Action with PR-Agent + OpenRouter
 
-- [ ] **T1.2** Configure model and review flags  
+- [x] **T1.2** Configure model and review flags  
   (`require_score_review`, risk assessment, merge recommendation)
 
-- [ ] **T1.3** Force structured output format via `extra_instructions`
+- [x] **T1.3** Force structured output format
+  (PR-Agent builds its comment in Python, so the contract sections are rendered
+  by `scripts/render_contract_comment.py` from the structured review and posted
+  by the workflow — see CONTRACT.md)
 
-- [ ] **T1.4** Manual validation  
+- [x] **T1.4** Manual validation  
   Open a test PR and confirm the comment matches the contract. Attach example output.
 
 **Slice 1 complete when:** A real PR produces a correctly structured review comment.

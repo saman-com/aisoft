@@ -1,0 +1,253 @@
+"""Post the contract comment, replacing the previous one.
+
+`gh pr comment` appends, so a PR pushed to five times would end up with five
+review comments and a parser reading the newest could still pick up a stale
+one. This keeps exactly one: it looks for a contract comment by the workflow
+account and edits it in place, and only creates one when none exists.
+
+Finding the comment by content rather than by a hidden marker keeps the body
+identical to CONTRACT.md and lets the poster and the Slice 2 parser agree on
+what a contract comment is.
+
+Usage inside the workflow:
+
+    python3 scripts/post_contract_comment.py --pr 27 --body-file contract-comment.md
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import subprocess
+import sys
+
+# The first line every contract comment starts with, per CONTRACT.md.
+CONTRACT_HEADER = "## Confidence Score"
+
+
+class CommentError(RuntimeError):
+    """The comment list could not be read, so posting is unsafe."""
+
+
+def _login(comment: dict) -> str:
+    user = comment.get("user") or {}
+    return str(user.get("login") or "")
+
+
+def _is_same_account(login: str, author: str) -> bool:
+    """Whether `login` is the account this workflow posts as.
+
+    An exact match, or a match after removing `[bot]` from both sides - GitHub
+    reports the Actions token as `github-actions` in some responses and
+    `github-actions[bot]` in others. The suffix is only stripped when *both*
+    sides carry it, so a bot comment cannot match a human login that happens to
+    be the same word.
+
+    Nothing wider is accepted: matching any bot account would let this script
+    PATCH another tool's comment, which is destructive and hard to notice.
+    """
+    if not login or not author:
+        return False
+    if login == author:
+        return True
+    return login.endswith("[bot]") and author.endswith("[bot]") and login[:-5] == author[:-5]
+
+
+def pick_contract_comment(comments: list[dict], author: str) -> int | None:
+    """Return the id of the contract comment by `author`, if any.
+
+    "Newest" is by numeric id. GitHub ids are snowflakes, so they sort by
+    creation time, and the API returns comments oldest first - the last match
+    wins. If a PR somehow holds more than one, every one but the highest id is
+    stale output from an earlier version of this workflow, and updating the
+    highest keeps the parser reading the fresh one.
+    """
+    newest: int | None = None
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("body")
+        comment_id = item.get("id")
+        if not isinstance(body, str) or not isinstance(comment_id, int):
+            continue
+        if not body.lstrip().startswith(CONTRACT_HEADER):
+            continue
+        if not _is_same_account(_login(item), author):
+            continue
+        if newest is None or comment_id > newest:
+            newest = comment_id
+    return newest
+
+
+def _gh(*args: str, stdin: str | None = None) -> str:
+    result = subprocess.run(
+        ["gh", *args], input=stdin, capture_output=True, text=True, check=True
+    )
+    return result.stdout
+
+
+def _write_body(repo: str, pr: int | None, body: str, comment_id: int | None) -> None:
+    """Write `body` through the API's JSON input.
+
+    The body is model-derived text of unbounded length. Sending it as a command
+    line argument risks hitting ARG_MAX, and `gh api -f body=...` turns a value
+    starting with `@` into a file reference. Passing the JSON payload on stdin
+    avoids both: nothing is parsed out of the body and no length limit applies.
+    """
+    payload = json.dumps({"body": body})
+    if comment_id is None:
+        _gh("api", "--method", "POST", f"repos/{repo}/issues/{pr}/comments",
+            "-H", "Content-Type: application/json", "--input", "-", stdin=payload)
+    else:
+        _gh("api", "--method", "PATCH", f"repos/{repo}/issues/comments/{comment_id}",
+            "-H", "Content-Type: application/json", "--input", "-", stdin=payload)
+
+
+def list_comments(repo: str, pr: int) -> list[dict]:
+    out = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/issues/{pr}/comments",
+        "--jq",
+        "[.[] | {id: .id, body: .body, user: {login: .user.login, type: .user.type}}]",
+    )
+    # --paginate concatenates one JSON array per page.
+    comments: list[dict] = []
+    for chunk in _split_json_arrays(out):
+        comments.extend(chunk)
+    return comments
+
+
+def _split_json_arrays(out: str) -> list[list[dict]]:
+    """Parse the JSON arrays `gh api --paginate` concatenates.
+
+    `gh` can print a warning to stdout alongside the payload, so the output is
+    not required to be pure JSON.
+
+    Anything unreadable raises. Skipping the line would be friendlier, but the
+    skipped text may have been a whole page, and a partial list can hide the
+    existing contract comment, after which this script posts a duplicate.
+    Refusing to post is recoverable; a duplicate comment is not.
+    """
+    decoder = json.JSONDecoder()
+    chunks: list[list[dict]] = []
+    skipped = False
+    index = 0
+    while index < len(out):
+        while index < len(out) and out[index] in " \t\r\n":
+            index += 1
+        if index >= len(out):
+            break
+        try:
+            value, index = decoder.raw_decode(out, index)
+        except json.JSONDecodeError:
+            # Skip the rest of this line and try the next one.
+            newline = out.find("\n", index)
+            if newline < 0:
+                break
+            index = newline + 1
+            skipped = True
+            continue
+        if isinstance(value, list):
+            chunks.append(value)
+
+    # Any unreadable line is fatal, not something to skip past. The skipped text
+    # could be one page among several, and a partial list can hide the existing
+    # contract comment - after which this script posts a duplicate. Refusing to
+    # post is recoverable; a duplicate comment is what the loop cannot undo.
+    if skipped or (not chunks and out.strip()):
+        raise CommentError("could not parse the comment list from gh api")
+    return chunks
+
+
+def resolve_author() -> str:
+    """Return the login this token posts comments as, or "" if it cannot tell.
+
+    Hardcoding `github-actions[bot]` is wrong for a workflow that authenticates
+    with a GitHub App or a PAT: every run would fail to recognise its own
+    comment and add another one. The API answer is authoritative.
+
+    There is deliberately no fallback. Guessing the author would silently turn
+    every later run into a new duplicate comment instead of an update, which the
+    Slice 2 parser would then have to disambiguate, and the loop would read a
+    stale one. An empty string makes the caller fail with a clear message.
+    """
+    try:
+        return _gh("api", "user", "--jq", ".login").strip()
+    except (subprocess.CalledProcessError, OSError) as error:
+        # CalledProcessError: the token cannot read its own user. OSError: `gh`
+        # is missing or not executable. Both mean the author is unknown.
+        print(f"warning: cannot determine the posting account: {error}", file=sys.stderr)
+        return ""
+
+
+def post(repo: str, pr: int, body: str, author: str) -> str:
+    """Create or update the contract comment; return a line describing what happened."""
+    existing = pick_contract_comment(list_comments(repo, pr), author)
+    _write_body(repo, pr, body, existing)
+    if existing is None:
+        return f"created a new contract comment on #{pr}"
+    return f"updated contract comment {existing} on #{pr}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pr", required=True, type=int)
+    parser.add_argument("--body-file", required=True, type=pathlib.Path)
+    parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repo")
+    parser.add_argument("--author", default=None, help="login the token posts as; detected if omitted")
+    args = parser.parse_args(argv)
+
+    # Reading the body first: a missing or unreadable file must be a clean
+    # error, not a traceback, and posting nothing is better than guessing at a
+    # body or creating an empty comment.
+    try:
+        body = args.body_file.read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot read {args.body_file}: {error}", file=sys.stderr)
+        return 1
+
+    # An unknown author is fatal, not something to guess at: a wrong login turns
+    # every run into a new comment instead of an update, and the loop would then
+    # read whichever one the API happened to return first.
+    author = args.author or resolve_author()
+    if not author:
+        print(
+            "error: cannot determine which account posts the comment. Pass --author "
+            "with the login this token posts as; guessing would silently create a "
+            "duplicate comment on every run instead of updating the existing one.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        repo = args.repo or _gh(
+            "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"
+        ).strip()
+    except (subprocess.CalledProcessError, OSError) as error:
+        # A runner with no remote, or no gh at all, should say so rather than
+        # die in a traceback.
+        print(f"error: cannot determine the repository: {error}", file=sys.stderr)
+        return 1
+    if not repo:
+        print("error: no repository given and none detected", file=sys.stderr)
+        return 1
+    if not body.lstrip().startswith(CONTRACT_HEADER):
+        print(f"error: {args.body_file} is not a contract comment", file=sys.stderr)
+        return 1
+    try:
+        print(post(repo, args.pr, body, author))
+    except CommentError as error:
+        # Posting blind would create a duplicate, so this is a failure, not a
+        # reason to carry on with an empty comment list.
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as error:
+        print(f"error: gh {' '.join(str(a) for a in error.cmd[1:])} failed: {error.stderr}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

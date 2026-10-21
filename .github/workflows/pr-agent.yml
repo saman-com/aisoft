@@ -1,44 +1,154 @@
 name: PR-Agent
 
-# Slice 0 skeleton: this workflow only proves the trigger and permissions
-# wiring. Slice 1 (T1.1) replaces the placeholder step with the real
-# `the-pr-agent/pr-agent` action call.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-# PR-Agent needs to read the diff and post a review comment on the PR.
+# PR-Agent reads the diff through the GitHub API; the contract comment is
+# posted with `gh` in the last step, so write access to the PR is needed.
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: write
+
+# One review at a time per PR. A new push cancels the review of the previous
+# head, which is what we want: the loop polls for the latest review.
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   pr-agent:
     name: PR-Agent review
     runs-on: ubuntu-latest
+    # Skip PRs opened by a bot, and never try to review from forks where the
+    # OpenRouter secret is unavailable.
+    #
+    # Only forks are skipped. There is no bot gate: Slice 5 has Pi open the PR
+    # itself, so a bot-authored PR must still be reviewed - a bot gate would
+    # leave the loop polling for a review that is never dispatched. Re-reviewing
+    # our own pushes cannot loop forever either, because posting the contract
+    # comment does not push a commit, and Slice 4 caps the iterations.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # ---------------------------------------------------------------
-      # PLACEHOLDER - the real PR-Agent step goes here in Slice 1 (T1.1).
-      # It will run `the-pr-agent/pr-agent` with:
-      #   OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      #   GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
-      #   github_action_config.auto_review: "true"
-      # ---------------------------------------------------------------
-      - name: Placeholder (PR-Agent step added in T1.1)
-        # Head/base refs come from a PR author's fork, so they are untrusted:
-        # pass them through env instead of inlining them into the script.
+      # PR-Agent renders its own review as a GFM table, so its headings can
+      # never match CONTRACT.md. It is configured (.pr_agent.toml) to publish
+      # to a check run instead of a comment, and to hand the structured review
+      # to the next step through the push_outputs file sink.
+      - name: Run PR-Agent (structured review only)
+        uses: the-pr-agent/pr-agent@v0.48.0
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PR-Agent reads OpenRouter credentials from OPENROUTER__KEY.
+          # GitHub stores the value as OPENROUTER_API_KEY - see README.md.
+          OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          # PR-Agent's default pr_actions is [opened, reopened, ready_for_review,
+          # review_requested]. Without "synchronize" it logs "Skipping action:
+          # synchronize" and never re-reviews after a push - which is the event
+          # the whole fix loop depends on.
+          github_action_config.pr_actions: '["opened", "reopened", "synchronize", "ready_for_review"]'
+          # Do NOT point PR_AGENT_CONFIG_BRANCH at the PR head. PR-Agent reads
+          # .pr_agent.toml from the default branch, and that is load-bearing: a
+          # PR that could supply its own extra_instructions could ask to be
+          # scored 5/5, which is the one thing the loop depends on being honest.
+          # Host-only key filtering does not help - extra_instructions and model
+          # are deliberately repo-settable. PR-Agent's own docs warn against
+          # deriving this from ${{ github.head_ref }} for the same reason.
+          #
+          # The operational keys below are supplied here instead. Environment
+          # variables outrank repo config, so the review runs on a known-good
+          # budget regardless of what the default branch happens to contain, and
+          # a broken .pr_agent.toml cannot stop reviews from running at all.
+          # These are not review judgements: the score, the findings and the
+          # prompt all still come from the model under maintainer-controlled
+          # rules.
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "1048576"
+          CONFIG__MAX_OUTPUT_TOKENS: "8000"
+          CONFIG__REASONING_EFFORT: "none"
+          CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: '["deepseek/deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash"]'
+          # Publish the review as a check run instead of a comment. The contract
+          # comment is the only PR comment this workflow should ever create: a
+          # second, raw PR-Agent table would double the noise and give the Slice 2
+          # parser two candidate comments to choose between. Set here for the
+          # same reason as the budget above - it must not depend on the default
+          # branch already being correct.
+          GITHUB__PUBLISH_AS_CHECK_RUN: "true"
+          #
+          # push_outputs is host-only configuration: a repository's
+          # .pr_agent.toml cannot enable it, so it is set here, where the
+          # workflow counts as the host.
+          PUSH_OUTPUTS__ENABLE: "true"
+          PUSH_OUTPUTS__CHANNELS: '["file"]'
+          PUSH_OUTPUTS__FILE_PATH: pr-agent-output/review.jsonl
+
+      # A review that fails to render must still leave a contract comment.
+      #
+      # `!cancelled()` matters as much as `always()`: concurrency cancels the
+      # superseded run when a newer push arrives, and without this guard that
+      # cancelled run would post a 0/5 comment the loop could read and stop on
+      # before the newer run replaces it.
+      # Otherwise the job simply goes red, the Slice 2 loop finds no comment to
+      # read and waits forever for a review that already failed. A 0/5 comment
+      # is the honest signal: it fails the loop's "keep going" test immediately
+      # and says why, instead of looking like a review that never arrived.
+      #
+      # This does overwrite a good earlier review when PR-Agent fails only
+      # transiently, and the loop then stops and asks for a human. That is the
+      # direction to fail in: the alternative - leaving the old review in place -
+      # makes the loop try to fix findings it already fixed, or worse, treat a
+      # stale 5/5 as a merge signal. A stopped loop is cheap; a wrong merge is not.
+      - name: Render the contract comment
+        if: always() && !cancelled()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          echo "PR-Agent skeleton workflow is wired up."
-          echo "Event: $EVENT_NAME"
-          echo "PR: #$PR_NUMBER ($HEAD_REF -> $BASE_REF)"
+          set -o pipefail
+          reason="PR-Agent produced no usable review; see $RUN_URL"
+          rendered=1
+          if ! python3 scripts/render_contract_comment.py \
+                 --jsonl pr-agent-output/review.jsonl \
+                 --out contract-comment.md; then
+            rendered=0
+            echo "::warning::rendering the review failed; posting a 0/5 comment"
+            python3 scripts/render_contract_comment.py --failure "$reason" \
+              --out contract-comment.md \
+              || printf '## Confidence Score\n0/5\n\n## Issues\n- Review failed: %s\n\n## Agent Prompt\nDo not attempt a fix. Check the workflow run logs.\n' \
+                   "$reason" > contract-comment.md
+          fi
+          echo "----- rendered comment -----"
+          cat contract-comment.md
+          # The loop must always get an answer, but a failed review must not look
+          # like a successful run: the comment is posted, then this step fails.
+          # An empty body means every rendering path failed, which is not
+          # something to post as a review at all.
+          if [ ! -s contract-comment.md ]; then
+            echo "::error::no contract comment was produced"
+            exit 1
+          fi
+          if [ "$rendered" -eq 0 ]; then
+            echo "::error::the review could not be rendered; a 0/5 comment was posted"
+            exit 1
+          fi
+
+      # `gh pr comment` appends, so this replaces any earlier contract comment
+      # instead: one review comment per PR, however many times it is pushed to.
+      - name: Post the contract comment
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # GITHUB_TOKEN cannot call `GET /user`, so the script cannot detect
+          # the login it posts as and must be told. The Actions token always
+          # posts as this account.
+          python3 scripts/post_contract_comment.py \
+            --pr "$PR_NUMBER" \
+            --body-file contract-comment.md \
+            --author 'github-actions[bot]'
