@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import sys
 
@@ -29,12 +30,37 @@ SCORE_THRESHOLDS = ((90, 5), (70, 4), (50, 3), (30, 2), (10, 1))
 
 
 def _score_to_fifths(raw: object) -> int:
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ContractError(f"missing or non-integer score: {raw!r}")
-    if not 0 <= raw <= 100:
-        raise ContractError(f"score out of range 0-100: {raw}")
+    """Map PR-Agent's 0-100 score onto the loop's 0-5 scale.
+
+    The score arrives as model output that PR-Agent has already parsed as YAML,
+    so the same number can show up as `90`, `90.0` or `"90"` depending on how
+    the model wrote it. Treating the non-int spellings as contract violations
+    would fail the render step and stall the loop on a review that is perfectly
+    usable, so numeric forms are coerced. A bool is rejected rather than
+    coerced, since `True` is an accident, not a score.
+    """
+    value: float
+    if isinstance(raw, bool):
+        raise ContractError(f"score must be a number, got {raw!r}")
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, float):
+        value = raw
+    elif isinstance(raw, str):
+        try:
+            value = float(raw.strip())
+        except ValueError:
+            raise ContractError(f"score is not a number: {raw!r}") from None
+    else:
+        raise ContractError(f"missing or non-numeric score: {raw!r}")
+
+    if not math.isfinite(value):
+        raise ContractError(f"score is not finite: {raw!r}")
+    if not 0 <= value <= 100:
+        raise ContractError(f"score out of range 0-100: {raw!r}")
+
     for floor, fifths in SCORE_THRESHOLDS:
-        if raw >= floor:
+        if value >= floor:
             return fifths
     return 0
 

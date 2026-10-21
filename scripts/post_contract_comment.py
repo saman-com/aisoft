@@ -32,7 +32,15 @@ def _login(comment: dict) -> str:
 
 
 def _is_same_account(login: str, author: str) -> bool:
-    """GitHub reports the Actions token as `github-actions` or `... [bot]`."""
+    """Whether `login` is the account this workflow posts as.
+
+    GitHub reports the Actions token as `github-actions` in some responses and
+    `github-actions[bot]` in others, and a GitHub App or PAT setup posts under
+    yet another name. Rather than depend on getting that string exactly right,
+    any bot account is accepted: the body guard in `main` already refuses to
+    post anything that is not a contract comment, so the worst case is editing
+    another bot's contract comment instead of creating a duplicate.
+    """
     return login.removesuffix("[bot]") == author.removesuffix("[bot]")
 
 
@@ -48,7 +56,9 @@ def pick_contract_comment(comments: list[dict], author: str) -> int | None:
             continue
         if not body.lstrip().startswith(CONTRACT_HEADER):
             continue
-        if not _is_same_account(_login(item), author):
+        login = _login(item)
+        is_bot = str((item.get("user") or {}).get("type") or "") == "Bot"
+        if not (is_bot or _is_same_account(login, author)):
             continue
         if newest is None or comment_id > newest:
             newest = comment_id
@@ -85,7 +95,7 @@ def list_comments(repo: str, pr: int) -> list[dict]:
         "--paginate",
         f"repos/{repo}/issues/{pr}/comments",
         "--jq",
-        "[.[] | {id: .id, body: .body, user: {login: .user.login}}]",
+        "[.[] | {id: .id, body: .body, user: {login: .user.login, type: .user.type}}]",
     )
     # --paginate concatenates one JSON array per page.
     comments: list[dict] = []

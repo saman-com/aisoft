@@ -54,14 +54,14 @@ jobs:
           # synchronize" and never re-reviews after a push - which is the event
           # the whole fix loop depends on.
           github_action_config.pr_actions: '["opened", "reopened", "synchronize", "ready_for_review"]'
-          # PR-Agent otherwise reads .pr_agent.toml from the default branch, so a
-          # PR that changes the reviewer's config cannot be tested until it is
-          # merged - which makes the review model itself unchangeable by review.
-          # Reading it from the PR head makes config changes testable in the PR
-          # that proposes them. Fork PRs are excluded above, so only people who
-          # can already push to this repository can reach this; PR-Agent still
-          # rejects host-only keys (credentials, endpoints) from repo config.
-          PR_AGENT_CONFIG_BRANCH: ${{ github.event.pull_request.head.ref }}
+          # Do NOT point this at the PR head. PR-Agent reads .pr_agent.toml from
+          # the default branch, and that is load-bearing here: a PR that could
+          # supply its own extra_instructions could ask to be scored 5/5, which
+          # is the one thing the whole loop depends on being honest. Host-only
+          # key filtering does not help - extra_instructions and model are
+          # deliberately repo-settable. The cost is that a change to the review
+          # config takes effect after merge, not during the PR that makes it.
+          #
           # push_outputs is host-only configuration: a repository's
           # .pr_agent.toml cannot enable it, so it is set here, where the
           # workflow counts as the host.

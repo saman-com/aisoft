@@ -71,6 +71,30 @@ class ScoreTest(unittest.TestCase):
         with self.assertRaises(ContractError):
             render_contract_comment(data)
 
+    def test_float_score_is_accepted(self):
+        """The score is parsed YAML from model output, so it may be 90.0."""
+        self.assertEqual(self.score_line(90.0), "5/5")
+        self.assertEqual(self.score_line(89.4), "4/5")
+
+    def test_numeric_string_score_is_accepted(self):
+        """A quoted score must not stall the loop on a usable review."""
+        self.assertEqual(self.score_line("90"), "5/5")
+        self.assertEqual(self.score_line(" 72 "), "4/5")
+
+    def test_non_numeric_string_score_is_rejected(self):
+        with self.assertRaises(ContractError):
+            render_contract_comment(review(score="high"))
+
+    def test_boolean_score_is_rejected(self):
+        """True is an accident in YAML, not a score of 1."""
+        with self.assertRaises(ContractError):
+            render_contract_comment(review(score=True))
+
+    def test_non_finite_score_is_rejected(self):
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(ContractError):
+                render_contract_comment(review(score=bad))
+
 
 class IssuesTest(unittest.TestCase):
     def test_issue_becomes_a_bullet_with_its_location(self):

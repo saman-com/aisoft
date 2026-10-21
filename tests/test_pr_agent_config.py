@@ -142,10 +142,16 @@ class WorkflowTest(unittest.TestCase):
     def test_github_token_is_passed(self):
         self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.text)
 
-    def test_config_is_read_from_the_pr_head(self):
-        """Otherwise a PR cannot change .pr_agent.toml: the run would use the
-        default branch's copy and the change would only take effect once merged."""
-        self.assertIn("PR_AGENT_CONFIG_BRANCH: ${{ github.event.pull_request.head.ref }}", self.text)
+    def test_config_is_not_read_from_the_pr_head(self):
+        """A PR must not be able to configure the reviewer that scores it.
+
+        Pointing PR_AGENT_CONFIG_BRANCH at the PR head made review config
+        changes testable before merge, but it also let a PR author rewrite
+        extra_instructions and ask for 5/5 - the one value the loop trusts.
+        PR-Agent's host-only filtering does not cover extra_instructions or
+        model, so the default branch is the only safe source.
+        """
+        self.assertNotIn("PR_AGENT_CONFIG_BRANCH:", self.text)
 
     def test_fork_pull_requests_are_skipped(self):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", self.text)

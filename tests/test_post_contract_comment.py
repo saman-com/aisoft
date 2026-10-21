@@ -23,8 +23,8 @@ from post_contract_comment import pick_contract_comment  # noqa: E402
 BOT = "github-actions[bot]"
 
 
-def comment(comment_id, body, author=BOT):
-    return {"id": comment_id, "body": body, "user": {"login": author}}
+def comment(comment_id, body, author=BOT, kind="Bot"):
+    return {"id": comment_id, "body": body, "user": {"login": author, "type": kind}}
 
 
 class PickContractCommentTest(unittest.TestCase):
@@ -40,7 +40,7 @@ class PickContractCommentTest(unittest.TestCase):
 
     def test_ignores_comments_from_other_authors(self):
         """A human quoting the format must not be edited."""
-        comments = [comment(7, "## Confidence Score\n5/5", author="some-reviewer")]
+        comments = [comment(7, "## Confidence Score\n5/5", author="some-reviewer", kind="User")]
         self.assertIsNone(pick_contract_comment(comments, BOT))
 
     def test_updates_the_latest_when_several_exist(self):
@@ -59,6 +59,19 @@ class PickContractCommentTest(unittest.TestCase):
         """The workflow token posts as ``github-actions`` with or without [bot]."""
         comments = [comment(4, "## Confidence Score\n4/5", author="github-actions")]
         self.assertEqual(pick_contract_comment(comments, "github-actions[bot]"), 4)
+
+    def test_other_bot_accounts_are_matched(self):
+        """A GitHub App or PAT posts under a different name than the default.
+
+        Matching the exact login would create a fresh duplicate comment on every
+        run for those setups instead of updating the existing one.
+        """
+        comments = [comment(6, "## Confidence Score\n4/5", author="my-review-app[bot]")]
+        self.assertEqual(pick_contract_comment(comments, "github-actions[bot]"), 6)
+
+    def test_a_human_bot_quoting_the_format_is_still_ignored(self):
+        comments = [comment(8, "## Confidence Score\n5/5", author="alice", kind="User")]
+        self.assertIsNone(pick_contract_comment(comments, "github-actions[bot]"))
 
     def test_malformed_entries_are_skipped(self):
         comments = [{"id": 9}, comment(10, "## Confidence Score\n1/5")]
