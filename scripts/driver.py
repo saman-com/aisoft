@@ -45,6 +45,7 @@ from driver_comments import (
 )
 from driver_decision import decide
 from driver_pr import GhFailed, NoPullRequest, PullRequest, find_pull_request, resolve
+from driver_status import report
 from parse_contract_comment import ParseError, Review, parse_comment
 
 
@@ -174,10 +175,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         # The same rule the cycle exits on, so this read-only view can never
-        # claim "ready" for a review the loop would keep working on.
-        verdict = decide(review, iteration=args.iteration)
+        # claim "ready" for a review the loop would keep working on. The status
+        # formatting is shared with the cycle, so both print one shape.
+        verdict = decide(review, iteration=args.iteration, pr=pull_request.number)
         if verdict.is_done:
-            driver_log.log(verdict.message)
+            driver_log.log(report(verdict, pr=pull_request).render())
     return 0
 
 

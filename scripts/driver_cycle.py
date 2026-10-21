@@ -65,6 +65,7 @@ from driver_iteration import check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError, PiRun, run_pi
 from driver_pr import GhFailed, NoPullRequest, PullRequest, resolve
+from driver_status import report
 from parse_contract_comment import ParseError, Review, parse_comment
 
 
@@ -324,7 +325,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    # The delta first, then the verdict: what changed this cycle is context for
+    # the status, and the status is the line the operator acts on, so it goes
+    # last where it is not scrolled past.
     driver_log.log(summarize(result))
+    if result.decision is not None:
+        driver_log.log(report(result.decision, pr=result.pr).render())
     return 0
 
 

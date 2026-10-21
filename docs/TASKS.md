@@ -150,7 +150,24 @@
   fingerprint never counts as a repeat, so a clean review and a pair of
   issue-free low scores both stay out of the rule.
 
-- [ ] **T4.4** Final status reporting (“Ready for merge” or “Human needed”)
+- [x] **T4.4** Final status reporting (“Ready for merge” or “Human needed”)
+  `scripts/driver_status.py::report(decision, pr=...)` turns any `Decision` into the
+  block printed when the loop stops: a greppable headline, the PR address, then
+  `decide`'s own reason. The headline is chosen by outcome, never by score, so
+  only `SUCCESS` can print `READY FOR MERGE` (decorated with the real score, so a
+  4/5 exit never reads as 5/5), `HUMAN` prints `STOPPED AFTER N ITERATIONS - HUMAN
+  REVIEW NEEDED`, and `REPEATED` prints `STOPPED: SAME BLOCKING ISSUES - HUMAN
+  REVIEW NEEDED` without claiming the limit was hit. The address is the PR URL,
+  falling back to `#29` when gh returned none and when `--pr` skipped the lookup,
+  because the placeholder that path sets is not something a reader can open.
+  `Status.is_ready` and `needs_human` are derived from the outcome, so a caller
+  cannot print the ready line for a different verdict. Both `driver_cycle.main`
+  and `driver.py`'s read-only view print through this one renderer. Every outcome
+  exits 0: the exit code answers “did the tool work”, not “is the PR good”, and
+  1/2/3 already mean gh/git/parse failures.
+
+  _Not a loop. Printing the status for one review is this ticket; running the
+  attempts is T4.5, which calls `report()` rather than printing its own verdict._
 
 - [ ] **T4.5** Full loop integration test on at least two PRs
 

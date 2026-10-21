@@ -37,7 +37,7 @@ from driver_comments import (  # noqa: E402
     ReviewTimeout,
 )
 from driver_cycle import CycleResult, NoReview, run_cycle  # noqa: E402
-from driver_decision import Outcome  # noqa: E402
+from driver_decision import Outcome, decide  # noqa: E402
 from driver_git import GitError, NothingToPush, PushResult  # noqa: E402
 from driver_iteration import MAX_ITERATIONS, IterationLimit  # noqa: E402
 from driver_pi import PiError, PiRun  # noqa: E402
@@ -503,6 +503,65 @@ class CliTest(unittest.TestCase):
     def test_exit_3_when_the_contract_is_broken(self):
         with mock.patch.object(driver_cycle, "run_cycle", side_effect=ParseError("bad")):
             self.assertEqual(driver_cycle.main(["--pr", "31"]), 3)
+
+    def status_output(self, result) -> str:
+        """What `main` printed, as one string."""
+        with mock.patch.object(driver_cycle, "run_cycle", return_value=result), \
+             mock.patch.object(driver_cycle.driver_log, "log") as logged:
+            code = driver_cycle.main(["--pr", "31"])
+        text = "\n".join(str(call.args[0]) for call in logged.call_args_list)
+        return text, code
+
+    def test_a_finished_cycle_prints_the_status(self):
+        """T4.4: the last thing printed is what the operator acts on."""
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=AFTER_REVIEW,
+                pi_ok=True, pushed=True, pi_ran=True,
+                decision=decide(AFTER_REVIEW, iteration=1, pr=PR.number),
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("READY FOR MERGE", text)
+        self.assertIn(PR.url, text)
+
+    def test_a_human_stop_prints_the_status(self):
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=BEFORE_REVIEW,
+                pi_ok=True, pushed=False, pi_ran=False,
+                decision=decide(BEFORE_REVIEW, iteration=MAX_ITERATIONS, pr=PR.number),
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("HUMAN REVIEW NEEDED", text)
+        self.assertIn(PR.url, text)
+        self.assertNotIn("READY FOR MERGE", text)
+
+    def test_the_status_is_printed_after_the_delta(self):
+        """A reader scrolling to the bottom must land on the verdict."""
+        text, _ = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=AFTER_REVIEW,
+                pi_ok=True, pushed=True, pi_ran=True,
+                decision=decide(AFTER_REVIEW, iteration=1, pr=PR.number),
+            )
+        )
+        self.assertGreater(
+            text.index("READY FOR MERGE"), text.index("on " + PR.url)
+        )
+
+    def test_a_cycle_without_a_decision_still_prints_the_delta(self):
+        """Refusing to invent a verdict is better than printing a wrong one."""
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=None,
+                pi_ok=False, pushed=False, pi_ran=False,
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("READY FOR MERGE", text)
+        self.assertIn("dry run", text)
 
     def test_dry_run_is_passed_through(self):
         with mock.patch.object(

@@ -76,6 +76,40 @@ class MainTest(unittest.TestCase):
         self.assertIn("4/5", out)
         self.assertIn("1 issue", out)
 
+    def test_a_clean_review_prints_the_ready_status(self):
+        """T4.4: the read-only view uses the same status as the cycle.
+
+        Before T4.4 it printed `decide`'s sentence alone, which said the same
+        thing in a different shape from the cycle's. One renderer, so a run can
+        be grepped for one phrase whatever produced it.
+        """
+        clean = BODY.replace("4/5", "5/5").replace(
+            "- scripts/driver.py:42-50 — Missing timeout: The poll loop never times out.",
+            "None",
+        )
+        with mock.patch.object(driver, "resolve", return_value=PR), \
+             mock.patch.object(driver, "list_comments", return_value=[]), \
+             mock.patch.object(driver, "contract_comment", return_value=Comment(9, clean, "bot")), \
+             mock.patch("builtins.print") as printed:
+            code = driver.main(["--pr", "27", "--repo", "owner/repo"])
+        self.assertEqual(code, 0)
+        out = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertIn("READY FOR MERGE (5/5)", out)
+        # `--pr` skips the lookup, so there is no real URL to print. The status
+        # must fall back to the number rather than printing gh's placeholder.
+        self.assertIn("#27", out)
+        self.assertNotIn("given on the command line", out.split("READY FOR MERGE")[1])
+
+    def test_a_still_open_review_is_not_printed_as_ready(self):
+        """A CONTINUE is not a final status, so no verdict line is printed."""
+        with mock.patch.object(driver, "resolve", return_value=PR), \
+             mock.patch.object(driver, "list_comments", return_value=[]), \
+             mock.patch.object(driver, "contract_comment", return_value=Comment(9, BODY, "bot")), \
+             mock.patch("builtins.print") as printed:
+            driver.main(["--pr", "27", "--repo", "owner/repo", "--iteration", "1"])
+        out = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertNotIn("READY FOR MERGE", out)
+
     def test_no_pr_exits_2(self):
         with mock.patch.object(driver, "resolve", side_effect=NoPullRequest("none")):
             self.assertEqual(driver.main(["--branch", "x", "--repo", "o/r"]), 2)

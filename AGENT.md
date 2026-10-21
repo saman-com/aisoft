@@ -245,6 +245,40 @@ Two guards keep it from firing when it should not:
 Detection reads only blocking findings, so a reviewer reshuffling its P2 nits
 between attempts neither looks like progress nor triggers a stop.
 
+### The last line printed is the verdict, and only a clean review says ready
+
+A run is unattended, so the final status is what a person reads and acts on. It
+is built by `scripts/driver_status.py::report(decision, pr=...)` from the same
+`Decision` the cycle already stopped on, and has three parts: a greppable
+headline, the PR address, then `decide`'s own sentence as the reason.
+
+| Outcome | Headline |
+|---|---|
+| `SUCCESS` | `READY FOR MERGE (4/5)` - the review's real score |
+| `HUMAN` | `STOPPED AFTER 5 ITERATIONS - HUMAN REVIEW NEEDED` |
+| `REPEATED` | `STOPPED: SAME BLOCKING ISSUES - HUMAN REVIEW NEEDED` |
+| `CONTINUE` | `NOT FINISHED - ANOTHER ATTEMPT IS DUE` |
+
+**The verdict is chosen by outcome, never by score.** `READY FOR MERGE` is the
+line after which the obvious step is `gh pr merge`, so it is the one phrase that
+must not appear for a review that is not clean. `Status.is_ready` is a property
+of the outcome for the same reason: no caller can print the headline while
+holding a different verdict. The success headline carries the score, so the 4/5
+exit reads as 4/5 and not as a perfect review.
+
+**A stop always says where to go.** The address is the PR URL, or `#29` when
+`driver_pr.resolve` returned a PR without one. `driver._pull_request` sets the
+string `(given on the command line)` as the url when `--pr` skips the gh lookup;
+that is a note for the JSON output, not an address, so the status falls back to
+the number rather than printing something nobody can open.
+
+**Every outcome exits 0.** The exit code answers "did the tool work", not "is
+the PR good". The driver already uses 1, 2 and 3 for gh, git and parse failures,
+so a caller that cannot tell "needs a human" from "gh is broken" will page
+someone about the wrong thing. `EXIT_CODES` in `driver_status.py` is where that
+mapping lives, and a test scans every `Outcome` against it so a new one cannot be
+added without a code.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table

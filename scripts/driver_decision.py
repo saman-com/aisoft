@@ -78,6 +78,10 @@ class Decision:
     outcome: Outcome
     message: str
     iteration: int
+    # The score the verdict was reached from. Carried so a status line can show
+    # it without being handed the review again, which is one more thing a caller
+    # could pass wrongly.
+    score: int | None = None
 
     @property
     def is_done(self) -> bool:
@@ -170,7 +174,7 @@ def decide(
             else:
                 detail = "no issues"
             message = f"{_where(pr)} is ready for merge ({review.score}/5: {detail})."
-        return Decision(Outcome.SUCCESS, message, iteration)
+        return Decision(Outcome.SUCCESS, message, iteration, score=review.score)
 
     reason = _blocking_reason(review, review.blocking_issues)
 
@@ -189,18 +193,18 @@ def decide(
         and review.blocking_fingerprint == previous.blocking_fingerprint
     ):
         message = _repeated_message(review, previous, iteration, pr)
-        return Decision(Outcome.REPEATED, message, iteration)
+        return Decision(Outcome.REPEATED, message, iteration, score=review.score)
 
     if iteration < MAX_ITERATIONS:
         message = (
             f"{_where(pr)} scored {review.score}/5. {reason[0].upper()}{reason[1:]}. "
             f"Continuing to iteration {iteration + 1}/{MAX_ITERATIONS}."
         )
-        return Decision(Outcome.CONTINUE, message, iteration)
+        return Decision(Outcome.CONTINUE, message, iteration, score=review.score)
 
     message = (
         f"{_where(pr)} still scores {review.score}/5 after {iteration} iterations, "
         f"the hard limit of {MAX_ITERATIONS}. {reason[0].upper()}{reason[1:]}. "
         "A human needs to look at this PR."
     )
-    return Decision(Outcome.HUMAN, message, iteration)
+    return Decision(Outcome.HUMAN, message, iteration, score=review.score)
