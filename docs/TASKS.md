@@ -29,7 +29,7 @@
 - [x] **T0.2** Document the parsing contract  
   Create `CONTRACT.md` (or a section in README) that defines how to extract Score / Issues / Agent Prompt.
 
-- [ ] **T0.3** Create empty GitHub Action skeleton  
+- [x] **T0.3** Create empty GitHub Action skeleton  
   `.github/workflows/pr-agent.yml` that triggers on pull_request but does nothing yet.
 
 - [ ] **T0.4** Document required secrets  
