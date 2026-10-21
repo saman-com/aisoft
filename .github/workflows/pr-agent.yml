@@ -73,6 +73,13 @@ jobs:
           CONFIG__MAX_OUTPUT_TOKENS: "8000"
           CONFIG__REASONING_EFFORT: "none"
           CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: '["deepseek/deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash"]'
+          # Publish the review as a check run instead of a comment. The contract
+          # comment is the only PR comment this workflow should ever create: a
+          # second, raw PR-Agent table would double the noise and give the Slice 2
+          # parser two candidate comments to choose between. Set here for the
+          # same reason as the budget above - it must not depend on the default
+          # branch already being correct.
+          GITHUB__PUBLISH_AS_CHECK_RUN: "true"
           #
           # push_outputs is host-only configuration: a repository's
           # .pr_agent.toml cannot enable it, so it is set here, where the

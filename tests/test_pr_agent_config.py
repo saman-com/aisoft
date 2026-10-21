@@ -152,6 +152,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('CONFIG__MAX_OUTPUT_TOKENS:', self.text)
         self.assertIn('CONFIG__REASONING_EFFORT:', self.text)
         self.assertIn('CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS:', self.text)
+        self.assertIn('GITHUB__PUBLISH_AS_CHECK_RUN: "true"', self.text)
 
     def test_operational_budget_matches_the_toml(self):
         """The two sources must not drift apart.
