@@ -1,0 +1,43 @@
+
+text---
+
+### 2. `.pr_agent.toml`
+
+```toml
+# .pr_agent.toml
+# Forces PR-Agent to produce the exact format defined in CONTRACT.md
+
+[config]
+# Change this to any OpenRouter model you prefer
+model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
+
+
+[pr_reviewer]
+require_score_review = true
+require_risk_assessment = true
+require_merge_recommendation = true
+
+# This is the critical part – forces the exact three-section format
+extra_instructions = """
+You must always end your review with these three sections in this exact order and with nothing after them:
+
+## Confidence Score
+X/5
+
+## Issues
+- [P0/P1/P2] path/to/file:line — short description
+
+## Agent Prompt
+A single, self-contained prompt that a coding agent can copy-paste to fix all the issues above.
+Include concrete file paths and clear, actionable instructions.
+Do not add any text after the Agent Prompt section.
+
+Rules for the score:
+- 5/5 = ready to merge, no important issues
+- 4/5 = only minor polish needed
+- 3/5 = real issues that should be fixed
+- 2/5 or lower = significant problems
+
+Only list real bugs, security issues, or clear correctness problems in the Issues section.
+Do not list pure style nits unless they are severe.
+"""
