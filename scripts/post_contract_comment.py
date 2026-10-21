@@ -35,13 +35,12 @@ def _is_same_account(login: str, author: str) -> bool:
     """Whether `login` is the account this workflow posts as.
 
     GitHub reports the Actions token as `github-actions` in some responses and
-    `github-actions[bot]` in others, and a GitHub App or PAT setup posts under
-    yet another name. Rather than depend on getting that string exactly right,
-    any bot account is accepted: the body guard in `main` already refuses to
-    post anything that is not a contract comment, so the worst case is editing
-    another bot's contract comment instead of creating a duplicate.
+    `github-actions[bot]` in others, so the suffix is normalised. Nothing wider
+    is accepted: matching any bot account would let this script PATCH another
+    tool's comment, which is destructive and hard to notice. Callers must pass
+    the login the token actually posts under - see `resolve_author`.
     """
-    return login.removesuffix("[bot]") == author.removesuffix("[bot]")
+    return bool(login) and login.removesuffix("[bot]") == author.removesuffix("[bot]")
 
 
 def pick_contract_comment(comments: list[dict], author: str) -> int | None:
@@ -56,9 +55,7 @@ def pick_contract_comment(comments: list[dict], author: str) -> int | None:
             continue
         if not body.lstrip().startswith(CONTRACT_HEADER):
             continue
-        login = _login(item)
-        is_bot = str((item.get("user") or {}).get("type") or "") == "Bot"
-        if not (is_bot or _is_same_account(login, author)):
+        if not _is_same_account(_login(item), author):
             continue
         if newest is None or comment_id > newest:
             newest = comment_id
@@ -119,6 +116,22 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
     return chunks
 
 
+def resolve_author(fallback: str = "github-actions[bot]") -> str:
+    """Return the login this token posts comments as.
+
+    Hardcoding `github-actions[bot]` is wrong for a workflow that authenticates
+    with a GitHub App or a PAT: every run would fail to recognise its own
+    comment and add another one. The API answer is authoritative, and the
+    fallback covers a token that cannot read its own user (some fine-grained
+    tokens).
+    """
+    try:
+        login = _gh("api", "user", "--jq", ".login").strip()
+    except subprocess.CalledProcessError:
+        return fallback
+    return login or fallback
+
+
 def post(repo: str, pr: int, body: str, author: str) -> str:
     """Create or update the contract comment; return a line describing what happened."""
     existing = pick_contract_comment(list_comments(repo, pr), author)
@@ -133,16 +146,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--body-file", required=True, type=pathlib.Path)
     parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repo")
-    parser.add_argument("--author", default="github-actions[bot]")
+    parser.add_argument("--author", default=None, help="login the token posts as; detected if omitted")
     args = parser.parse_args(argv)
 
+    author = args.author or resolve_author()
     repo = args.repo or _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
     body = args.body_file.read_text(encoding="utf-8")
     if not body.lstrip().startswith(CONTRACT_HEADER):
         print(f"error: {args.body_file} is not a contract comment", file=sys.stderr)
         return 1
     try:
-        print(post(repo, args.pr, body, args.author))
+        print(post(repo, args.pr, body, author))
     except subprocess.CalledProcessError as error:
         print(f"error: gh {' '.join(str(a) for a in error.cmd[1:])} failed: {error.stderr}", file=sys.stderr)
         return 1

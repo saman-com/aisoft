@@ -18,6 +18,7 @@ import argparse
 import json
 import math
 import pathlib
+import re
 import sys
 
 
@@ -27,6 +28,9 @@ class ContractError(ValueError):
 
 # PR-Agent scores 0-100; the loop speaks in fifths.
 SCORE_THRESHOLDS = ((90, 5), (70, 4), (50, 3), (30, 2), (10, 1))
+
+# A line that starts a Markdown heading, e.g. "## Issues" or "# Agent Prompt".
+HEADING_ESCAPE = re.compile(r"^(#{1,6})(?=\s|$)", re.MULTILINE)
 
 
 def _score_to_fifths(raw: object) -> int:
@@ -66,9 +70,9 @@ def _score_to_fifths(raw: object) -> int:
 
 
 def _format_issue(issue: dict) -> str:
-    path = str(issue.get("relevant_file") or "").strip()
-    header = str(issue.get("issue_header") or "").strip()
-    content = " ".join(str(issue.get("issue_content") or "").split())
+    path = _escape_headings(str(issue.get("relevant_file") or "").strip())
+    header = _escape_headings(str(issue.get("issue_header") or "").strip())
+    content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
     try:
         start = int(issue.get("start_line") or 0)
         end = int(issue.get("end_line") or start)
@@ -81,6 +85,22 @@ def _format_issue(issue: dict) -> str:
 
 
 NO_OP_PROMPT = "No issues found; no changes required."
+
+
+def _escape_headings(text: str) -> str:
+    """Neutralise section headings inside model-supplied text.
+
+    The Slice 2 parser splits the comment on the three `##` headings. Model text
+    is quoted into the comment, so a finding or prompt that mentions
+    `## Issues` would create a fourth heading and reattribute everything after
+    it - the parser would read the wrong prompt, or take one issue's text for
+    the start of another section. Escaping rather than rejecting keeps a usable
+    review usable.
+
+    Only line-initial `#` runs are touched, so a heading mentioned mid-sentence
+    stays readable.
+    """
+    return HEADING_ESCAPE.sub(r"\\\1", text)
 
 
 def _derive_agent_prompt(issues: list[dict]) -> str:
@@ -100,9 +120,9 @@ def _derive_agent_prompt(issues: list[dict]) -> str:
 
     lines = ["Fix the following issues reported by the PR review."]
     for issue in issues:
-        path = str(issue.get("relevant_file") or "").strip()
-        header = str(issue.get("issue_header") or "").strip()
-        content = " ".join(str(issue.get("issue_content") or "").split())
+        path = _escape_headings(str(issue.get("relevant_file") or "").strip())
+        header = _escape_headings(str(issue.get("issue_header") or "").strip())
+        content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
         try:
             start = int(issue.get("start_line") or 0)
             end = int(issue.get("end_line") or start)
@@ -131,11 +151,12 @@ def render_contract_comment(review: dict) -> str:
     prompt = review.get("agent_prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         prompt = _derive_agent_prompt(findings)
+    prompt = _escape_headings(prompt.strip())
 
     return (
         f"## Confidence Score\n{score}/5\n\n"
         f"## Issues\n{issues_body}\n\n"
-        f"## Agent Prompt\n{prompt.strip()}\n"
+        f"## Agent Prompt\n{prompt}\n"
     )
 
 

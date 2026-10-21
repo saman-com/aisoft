@@ -60,14 +60,21 @@ class PickContractCommentTest(unittest.TestCase):
         comments = [comment(4, "## Confidence Score\n4/5", author="github-actions")]
         self.assertEqual(pick_contract_comment(comments, "github-actions[bot]"), 4)
 
-    def test_other_bot_accounts_are_matched(self):
-        """A GitHub App or PAT posts under a different name than the default.
+    def test_a_different_bot_account_is_not_matched(self):
+        """Another tool's comment must never be edited.
 
-        Matching the exact login would create a fresh duplicate comment on every
-        run for those setups instead of updating the existing one.
+        Accepting any bot account made this script PATCH a comment belonging to
+        a different bot that happened to start with the same header. The right
+        fix is for the caller to pass the login its own token posts under, not
+        to widen the match.
         """
         comments = [comment(6, "## Confidence Score\n4/5", author="my-review-app[bot]")]
-        self.assertEqual(pick_contract_comment(comments, "github-actions[bot]"), 6)
+        self.assertIsNone(pick_contract_comment(comments, "github-actions[bot]"))
+
+    def test_the_app_login_is_matched_when_it_is_the_author(self):
+        """A GitHub App run passes its own login and finds its own comment."""
+        comments = [comment(6, "## Confidence Score\n4/5", author="my-review-app[bot]")]
+        self.assertEqual(pick_contract_comment(comments, "my-review-app[bot]"), 6)
 
     def test_a_human_bot_quoting_the_format_is_still_ignored(self):
         comments = [comment(8, "## Confidence Score\n5/5", author="alice", kind="User")]
