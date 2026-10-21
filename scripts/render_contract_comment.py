@@ -178,11 +178,14 @@ def _derive_agent_prompt(issues: list[dict]) -> str:
     if not issues:
         return NO_OP_PROMPT
 
+    # Text is taken raw here: render_contract_comment escapes the finished prompt
+    # once. Escaping per field as well would double up on findings whose text
+    # starts with a heading, turning "\\## X" into "\\\\## X" in the posted body.
     lines = ["Fix the following issues reported by the PR review."]
     for issue in issues:
-        path = _escape_headings(str(issue.get("relevant_file") or "").strip())
-        header = _escape_headings(str(issue.get("issue_header") or "").strip())
-        content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
+        path = str(issue.get("relevant_file") or "").strip()
+        header = str(issue.get("issue_header") or "").strip()
+        content = " ".join(str(issue.get("issue_content") or "").split())
         location = _format_location(path, issue.get("start_line"), issue.get("end_line"))
         lines.append(f"- {location}: {header}. {content}".rstrip())
     lines.append("Keep each change minimal and leave the rest of the code untouched.")

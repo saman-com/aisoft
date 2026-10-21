@@ -326,6 +326,30 @@ class ScoreBoundaryTest(unittest.TestCase):
             self.assertEqual(self.score_line(raw), expected, raw)
 
 
+class DoubleEscapeTest(unittest.TestCase):
+    """The derived prompt must be escaped once, not twice.
+
+    A finding whose text starts with a heading is escaped in the Issues section
+    and again when the prompt is assembled, so the posted body showed
+    "\\\\## Issues" instead of "\\## Issues".
+    """
+
+    def test_a_heading_in_a_finding_appears_once_escaped_in_the_prompt(self):
+        data = review(
+            key_issues_to_review=[{
+                "relevant_file": "a.py",
+                "issue_header": "## Issues",
+                "issue_content": "Body.",
+                "start_line": 1,
+                "end_line": 2,
+            }],
+            agent_prompt="",
+        )
+        prompt = render_contract_comment(data).split("## Agent Prompt\n", 1)[1]
+        self.assertNotIn("\\\\##", prompt)
+        self.assertIn("## Issues", prompt)
+
+
 class FloatLineTest(unittest.TestCase):
     """YAML turns 42.0 into a float, so the schema's int never arrives."""
 
