@@ -92,6 +92,11 @@ class ScoreTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(parse_comment(GOOD.replace("4/5", raw)).score, expected)
 
+    def test_a_line_of_prose_above_the_score_is_skipped(self):
+        """CONTRACT.md says to take the first X/5 in the section, not the first line."""
+        body = GOOD.replace("4/5", "The review covers the driver only.\n4/5")
+        self.assertEqual(parse_comment(body).score, 4)
+
     def test_rejects_a_score_above_five(self):
         with self.assertRaises(ParseError) as caught:
             parse_comment(GOOD.replace("4/5", "6/5"))

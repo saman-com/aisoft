@@ -115,12 +115,17 @@ def _split_sections(body: str) -> dict[str, str]:
 
 
 def _parse_score(text: str) -> int:
+    """The first `X/5` in the section.
+
+    CONTRACT.md says to take the first integer followed by `/5`, so a line of
+    prose above the score does not make the comment unreadable. A number outside
+    0-5 raises rather than being clamped: a score the renderer could not have
+    produced means something upstream is wrong.
+    """
     for line in text.splitlines():
-        if not line.strip():
-            continue
         match = SCORE_LINE.match(line)
         if not match:
-            break
+            continue
         value = int(match.group("value"))
         if not 0 <= value <= 5:
             raise ParseError(f"invalid confidence score: {line.strip()}")

@@ -54,6 +54,14 @@ class ContractCommentTest(unittest.TestCase):
         """
         self.assertIsNone(contract_comment([comment(1, login="someone")]))
 
+    def test_a_human_account_named_like_the_bot_is_not_the_review(self):
+        """Only the `[bot]` suffix makes it the workflow's own comment."""
+        self.assertIsNone(contract_comment([comment(1, login="github-actions")]))
+
+    def test_the_bot_suffix_is_ignored_when_both_sides_carry_it(self):
+        found = contract_comment([comment(2)], author="github-actions[bot]")
+        self.assertEqual(found.id, 2)
+
     def test_the_newest_comment_wins(self):
         found = contract_comment([comment(3), comment(9)])
         self.assertEqual(found.id, 9)

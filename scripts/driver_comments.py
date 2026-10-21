@@ -132,8 +132,20 @@ def _to_comment(raw: dict) -> Comment | None:
     )
 
 
+def _same_account(login: str, author: str) -> bool:
+    """Whether `login` is the account `author`.
+
+    Stripping `[bot]` from both sides would make a human account named
+    `github-actions` match `github-actions[bot]`, and the loop acts on whatever it
+    reads, so the suffix is only ignored when both sides carry it.
+    """
+    if login == author:
+        return True
+    return login.endswith("[bot]") and author.endswith("[bot]") and login[:-5] == author[:-5]
+
+
 def _is_contract_comment(comment: Comment, author: str) -> bool:
-    if comment.author.removesuffix("[bot]") != author.removesuffix("[bot]"):
+    if not _same_account(comment.author, author):
         return False
     return comment.body.lstrip().startswith(CONTRACT_HEADER)
 
