@@ -54,17 +54,23 @@ def _format_issue(issue: dict) -> str:
     return f"- {location or '(no location)'} — {title}{content}".rstrip()
 
 
+NO_OP_PROMPT = "No issues found; no changes required."
+
+
 def _derive_agent_prompt(issues: list[dict]) -> str:
     """Build a prompt from the findings when the model did not supply one.
 
-    `agent_prompt` is not part of PR-Agent's review schema, so a model may skip
-    it. Deriving the prompt instead of failing keeps the comment useful and
-    keeps the loop deterministic on model behaviour we do not control.
+    `agent_prompt` is not part of PR-Agent's review schema, so the model may
+    skip it, and in practice it always does. Deriving the prompt instead of
+    failing keeps the comment useful and the loop indifferent to model
+    behaviour we do not control.
+
+    No findings means nothing to fix - the successful end of the loop, not an
+    error. Raising here failed the workflow on every clean PR and left no
+    comment at all, so the loop could never observe its own success.
     """
     if not issues:
-        raise ContractError(
-            "review has no agent_prompt and no issues, so there is nothing for an agent to do"
-        )
+        return NO_OP_PROMPT
 
     lines = ["Fix the following issues reported by the PR review."]
     for issue in issues:

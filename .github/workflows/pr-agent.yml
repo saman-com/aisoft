@@ -73,8 +73,13 @@ jobs:
           echo "----- rendered comment -----"
           cat contract-comment.md
 
+      # `gh pr comment` appends, so this replaces any earlier contract comment
+      # instead: one review comment per PR, however many times it is pushed to.
       - name: Post the contract comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR_NUMBER" --body-file contract-comment.md
+        run: |
+          python3 scripts/post_contract_comment.py \
+            --pr "$PR_NUMBER" \
+            --body-file contract-comment.md

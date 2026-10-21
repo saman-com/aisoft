@@ -83,11 +83,22 @@ A score outside 0–100 is a contract violation, not a clamp.
 ### Agent Prompt
 
 PR-Agent's review schema has no `agent_prompt` field, so the renderer asks the
-model for one through `extra_instructions`. When the model omits it, the
-renderer builds a deterministic prompt from the findings rather than failing:
-model-side omissions are expected, and a stalled loop is worse than a derived
-prompt. It fails only when there is neither a prompt nor any finding, since
-then there is nothing to hand an agent.
+model for one through `extra_instructions` and falls back to building one from
+the findings. The fallback is the normal path: model-side omissions are
+expected, and a stalled loop is worse than a derived prompt.
+
+When a review has no findings at all, the prompt is the fixed line
+`No issues found; no changes required.` A clean review is the success case, so
+failing on it would mean the loop could never observe its own success.
+
+### One comment per PR
+
+A PR is pushed to once per fix iteration, so the poster updates the existing
+contract comment instead of appending. A contract comment is recognised by
+starting with `## Confidence Score` and being authored by the workflow account;
+the newest match is the one updated. There is never more than one per PR, and
+no hidden marker is embedded, so the posted body is exactly what this document
+describes.
 
 ---
 

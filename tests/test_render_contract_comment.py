@@ -140,11 +140,20 @@ class AgentPromptTest(unittest.TestCase):
         del data["agent_prompt"]
         self.assertEqual(render_contract_comment(data), render_contract_comment(data))
 
-    def test_no_prompt_and_no_issues_is_rejected(self):
-        data = review()
+    def test_no_prompt_and_no_issues_renders_a_no_op_prompt(self):
+        """A clean review is the loop's success case, not an error.
+
+        ``agent_prompt`` is absent from PR-Agent's schema, so it is missing on
+        every review. Rejecting the "no prompt, no findings" combination made
+        the render step exit 1 on exactly the review that means "done": a 5/5
+        with nothing to fix. It must render a prompt that tells an agent to do
+        nothing.
+        """
+        data = review(score=100)
         del data["agent_prompt"]
-        with self.assertRaises(ContractError):
-            render_contract_comment(data)
+        out = render_contract_comment(data)
+        self.assertIn("## Confidence Score\n5/5", out)
+        self.assertEqual(self.prompt_section(out).strip(), "No issues found; no changes required.")
 
 
 if __name__ == "__main__":
