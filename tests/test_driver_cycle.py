@@ -36,7 +36,7 @@ from driver_comments import (  # noqa: E402
     Comment,
     ReviewTimeout,
 )
-from driver_cycle import CycleResult, run_cycle  # noqa: E402
+from driver_cycle import CycleResult, NoReview, run_cycle  # noqa: E402
 from driver_git import GitError, NothingToPush, PushResult  # noqa: E402
 from driver_pi import PiError, PiRun  # noqa: E402
 from driver_pr import GhFailed, NoPullRequest, PullRequest  # noqa: E402
@@ -267,8 +267,16 @@ class CliTest(unittest.TestCase):
             self.assertEqual(driver_cycle.main(["--pr", "31"]), 0)
 
     def test_exit_2_when_there_is_nothing_to_do(self):
+        """A not-yet-posted review is "try again", not an environment failure.
+
+        PR-Agent reported this as a bug twice, claiming `NoReview` (a DriverError)
+        would be caught by the exit-1 branch first. Python picks the first matching
+        except clause, and the exit-2 clause lists `NoReview` explicitly, so the
+        two claims were wrong - but the ordering is what makes it wrong, so pin it.
+        """
         for error in (
             NoPullRequest("no pr"),
+            NoReview("no review yet"),
             ReviewTimeout("no new review"),
             NothingToPush("nothing"),
         ):
