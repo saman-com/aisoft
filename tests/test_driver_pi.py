@@ -41,14 +41,17 @@ class BuildCommandTest(unittest.TestCase):
         self.assertIn("--approve", build_command())
 
     def test_the_edit_tools_are_still_available(self):
-        """Removing `bash` must not remove the ability to do the work.
+        """The allowlist must still permit the work the run exists to do.
 
-        `--exclude-tools` only subtracts, so `edit` and `write` stay. Pinning it
-        here stops the exclusion quietly narrowing to a run that cannot fix code.
+        A safety flag that also blocks `edit` and `write` would turn every attempt
+        into "nothing to push" instead of a fix, so the editing tools are pinned
+        alongside their absence being impossible.
         """
         command = build_command()
-        self.assertNotIn("--tools", command)
-        self.assertNotIn("--no-tools", command)
+        allowlist = command[command.index("--tools") + 1].split(",")
+        for tool in ("read", "edit", "write"):
+            self.assertIn(tool, allowlist)
+        self.assertNotIn("bash", allowlist)
 
     def test_the_prompt_is_not_on_the_command_line(self):
         """A prompt in argv is visible to every process and limited to ARG_MAX."""
@@ -64,14 +67,22 @@ class BuildCommandTest(unittest.TestCase):
         """Pi must edit and stop there; the driver owns the commit and the push.
 
         `bash` let Pi run `git commit` and `git push` itself (seen live on PR #31,
-        commit a573f9d), which bypasses every push invariant the driver holds:
-        the explicit non-forced refspec, the branch check, and reading back the
-        commit that landed. Once Pi has pushed, `commit_and_push` finds a clean
-        tree whose HEAD is already on the remote and correctly reports that there
-        was nothing to push, so a successful attempt looks like a stall.
+        commit a573f9d, and again on PR #32, commit 73709ba), which bypasses every
+        push invariant the driver holds: the explicit non-forced refspec, the
+        branch check, and reading back the commit that landed. Once Pi has pushed,
+        `commit_and_push` finds a clean tree whose HEAD is already on the remote
+        and correctly reports that there was nothing to push, so a successful
+        attempt looks like a stall.
+
+        An allowlist is the only form that holds. Excluding the name is not enough:
+        with `--exclude-tools bash`, Pi reached a shell through its `subagent`
+        tool and the child process ran the command. So this pins the allowlist,
+        not the absence of one flag.
         """
-        self.assertIn("--exclude-tools", build_command())
-        self.assertIn("bash", build_command())
+        command = build_command()
+        self.assertIn("--tools", command)
+        self.assertNotIn("--exclude-tools", command)
+        self.assertNotIn("bash", command)
 
 
 class RunPiTest(unittest.TestCase):
