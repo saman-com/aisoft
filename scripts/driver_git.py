@@ -138,8 +138,8 @@ def commit_and_push(
     # code that did not change.
     if not made_commit and _remote_matches(branch, head, cwd=cwd):
         raise NothingToPush(
-            f"no changes to push: the working tree is clean and HEAD matches "
-            f"{REMOTE}/{branch} as of the last fetch, so Pi did not change anything"
+            f"no changes to push: the working tree is clean and {REMOTE}/{branch} "
+            f"already has HEAD, so Pi did not change anything"
         )
 
     # Explicit refspec, no force flag: this can only fast-forward the branch.
@@ -200,14 +200,29 @@ def _landed_commit(branch: str, head: str, *, cwd: str | None = None) -> str:
 
 
 def _remote_matches(branch: str, head: str, *, cwd: str | None = None) -> bool:
-    """Whether the local remote-tracking ref already points at `head`.
+    """Whether the remote itself already has `head` for `branch`.
 
-    Deliberately no fetch: this only decides whether there is anything local left
-    to send. A stale tracking ref makes the answer pessimistic (we push again,
-    harmlessly), never optimistic in a way that loses a commit.
+    The local remote-tracking ref is read first because it is free, but a match is
+    only a hint: the ref goes stale when the remote moves and nobody fetches, or
+    when a push updated the remote without moving the local ref. Concluding
+    "nothing to push" from a stale ref would skip a commit that exists only
+    locally, so a match is confirmed against the remote with `ls-remote`.
+
+    A remote that cannot be asked answers False: the caller pushes next, and a
+    push that cannot reach the remote fails there with git's own message.
     """
     completed = _git(["rev-parse", "--verify", f"refs/remotes/{REMOTE}/{branch}"], cwd=cwd)
-    return completed.returncode == 0 and completed.stdout.strip() == head
+    if completed.returncode != 0 or completed.stdout.strip() != head:
+        return False
+
+    remote = _git(["ls-remote", REMOTE, f"refs/heads/{branch}"], cwd=cwd)
+    if remote.returncode != 0:
+        return False
+    for line in remote.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == f"refs/heads/{branch}":
+            return fields[0] == head
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:

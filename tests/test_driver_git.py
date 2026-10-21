@@ -76,12 +76,11 @@ class Fixture:
                 else result((post_push or head) + "\n")
             ),
         }
-        if ls_remote is not None or not ls_remote_ok:
-            self.calls[("ls-remote", "origin", f"refs/heads/{branch}")] = (
-                result(f"{ls_remote}\trefs/heads/{branch}\n", returncode=0)
-                if ls_remote_ok
-                else result(returncode=128, stderr="could not read from remote")
-            )
+        self.calls[("ls-remote", "origin", f"refs/heads/{branch}")] = (
+            result(f"{ls_remote if ls_remote is not None else remote}\trefs/heads/{branch}\n")
+            if ls_remote_ok
+            else result(returncode=128, stderr="could not read from remote")
+        )
         self.seen: list[list[str]] = []
 
     def _git(self, args, **_kwargs):
@@ -164,6 +163,25 @@ class NothingToPushTest(unittest.TestCase):
     def test_a_branch_with_no_remote_copy_is_pushed(self):
         pushed = Fixture(status=" M a.py\n", head="newsha", remote="").run()
         self.assertEqual(pushed.branch, BRANCH)
+
+    def test_a_stale_tracking_ref_does_not_hide_an_unpushed_commit(self):
+        """HEAD matching the local ref says nothing about where the remote is.
+
+        A tracking ref updated by a fetch of a different commit can match HEAD
+        while the remote is behind; calling that NothingToPush would skip a real
+        push of Pi's work.
+        """
+        fixture = Fixture(status="", head="newsha", remote="newsha", ls_remote="oldsha")
+        pushed = fixture.run()
+        self.assertEqual(pushed.commit, "newsha")
+        self.assertFalse(pushed.made_commit)
+
+    def test_a_clean_tree_is_still_pushed_when_the_remote_is_unreadable(self):
+        """An unanswerable remote must not turn into a skipped push."""
+        fixture = Fixture(status="", head="newsha", remote="newsha", ls_remote_ok=False)
+        pushed = fixture.run()
+        self.assertEqual(pushed.commit, "newsha")
+        self.assertEqual(fixture.pushed(), [["push", "origin", f"HEAD:refs/heads/{BRANCH}"]])
 
 
 class CommitTest(unittest.TestCase):
