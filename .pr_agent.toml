@@ -3,7 +3,7 @@
 
 [config]
 # Change this to any OpenRouter model you prefer
-model = "openrouter/anthropic/claude-sonnet-4"
+model = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 
 [pr_reviewer]
 require_score_review = true
