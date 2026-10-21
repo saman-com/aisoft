@@ -1,0 +1,44 @@
+name: PR-Agent
+
+# Slice 0 skeleton: this workflow only proves the trigger and permissions
+# wiring. Slice 1 (T1.1) replaces the placeholder step with the real
+# `the-pr-agent/pr-agent` action call.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# PR-Agent needs to read the diff and post a review comment on the PR.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr-agent:
+    name: PR-Agent review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------------------------------------------------------------
+      # PLACEHOLDER - the real PR-Agent step goes here in Slice 1 (T1.1).
+      # It will run `the-pr-agent/pr-agent` with:
+      #   OPENROUTER__KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      #   GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+      #   github_action_config.auto_review: "true"
+      # ---------------------------------------------------------------
+      - name: Placeholder (PR-Agent step added in T1.1)
+        # Head/base refs come from a PR author's fork, so they are untrusted:
+        # pass them through env instead of inlining them into the script.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "PR-Agent skeleton workflow is wired up."
+          echo "Event: $EVENT_NAME"
+          echo "PR: #$PR_NUMBER ($HEAD_REF -> $BASE_REF)"

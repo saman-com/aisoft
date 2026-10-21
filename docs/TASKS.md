@@ -11,7 +11,7 @@
 
 ## Progress Overview
 
-- [ ] **Slice 0** – Foundation & Contracts
+- [x] **Slice 0** – Foundation & Contracts
 - [ ] **Slice 1** – PR-Agent Review Only
 - [ ] **Slice 2** – Local Parser (Read-Only)
 - [ ] **Slice 3** – Single Fix Cycle
@@ -23,16 +23,16 @@
 ## Slice 0 – Foundation & Contracts
 **Exit criteria:** Repo has the correct files and a clear output contract. No runtime behavior required yet.
 
-- [ ] **T0.1** Create `.pr_agent.toml` with the exact output contract  
+- [x] **T0.1** Create `.pr_agent.toml` with the exact output contract  
   Force `## Confidence Score`, `## Issues`, `## Agent Prompt` format.
 
-- [ ] **T0.2** Document the parsing contract  
+- [x] **T0.2** Document the parsing contract  
   Create `CONTRACT.md` (or a section in README) that defines how to extract Score / Issues / Agent Prompt.
 
-- [ ] **T0.3** Create empty GitHub Action skeleton  
+- [x] **T0.3** Create empty GitHub Action skeleton  
   `.github/workflows/pr-agent.yml` that triggers on pull_request but does nothing yet.
 
-- [ ] **T0.4** Document required secrets  
+- [x] **T0.4** Document required secrets  
   Note that `OPENROUTER_API_KEY` must be added in GitHub Secrets.
 
 **Slice 0 complete when:** All four tasks above are checked and the files exist.
