@@ -59,9 +59,18 @@ class PickContractCommentTest(unittest.TestCase):
         self.assertEqual(pick_contract_comment(comments, BOT), 3)
 
     def test_bot_login_variants_are_matched(self):
-        """The workflow token posts as ``github-actions`` with or without [bot]."""
-        comments = [comment(4, "## Confidence Score\n4/5", author="github-actions")]
+        """The workflow token posts as ``github-actions[bot]`` in both places."""
+        comments = [comment(4, "## Confidence Score\n4/5", author="github-actions[bot]")]
         self.assertEqual(pick_contract_comment(comments, "github-actions[bot]"), 4)
+
+    def test_the_bot_suffix_is_only_stripped_when_both_sides_carry_it(self):
+        """A human named ``github-actions`` is not the bot of the same name.
+
+        Stripping the suffix unconditionally equated the two, so a comment from
+        a real user could be edited by this script.
+        """
+        comments = [comment(4, "## Confidence Score\n4/5", author="github-actions")]
+        self.assertIsNone(pick_contract_comment(comments, "github-actions[bot]"))
 
     def test_a_different_bot_account_is_not_matched(self):
         """Another tool's comment must never be edited.

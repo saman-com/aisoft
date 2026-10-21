@@ -34,13 +34,20 @@ def _login(comment: dict) -> str:
 def _is_same_account(login: str, author: str) -> bool:
     """Whether `login` is the account this workflow posts as.
 
-    GitHub reports the Actions token as `github-actions` in some responses and
-    `github-actions[bot]` in others, so the suffix is normalised. Nothing wider
-    is accepted: matching any bot account would let this script PATCH another
-    tool's comment, which is destructive and hard to notice. Callers must pass
-    the login the token actually posts under - see `resolve_author`.
+    An exact match, or a match after removing `[bot]` from both sides - GitHub
+    reports the Actions token as `github-actions` in some responses and
+    `github-actions[bot]` in others. The suffix is only stripped when *both*
+    sides carry it, so a bot comment cannot match a human login that happens to
+    be the same word.
+
+    Nothing wider is accepted: matching any bot account would let this script
+    PATCH another tool's comment, which is destructive and hard to notice.
     """
-    return bool(login) and login.removesuffix("[bot]") == author.removesuffix("[bot]")
+    if not login or not author:
+        return False
+    if login == author:
+        return True
+    return login.endswith("[bot]") and author.endswith("[bot]") and login[:-5] == author[:-5]
 
 
 def pick_contract_comment(comments: list[dict], author: str) -> int | None:
@@ -134,23 +141,25 @@ def _split_json_arrays(out: str) -> list[list[dict]]:
     return chunks
 
 
-def resolve_author(fallback: str = "github-actions[bot]") -> str:
-    """Return the login this token posts comments as.
+def resolve_author() -> str:
+    """Return the login this token posts comments as, or "" if it cannot tell.
 
     Hardcoding `github-actions[bot]` is wrong for a workflow that authenticates
     with a GitHub App or a PAT: every run would fail to recognise its own
-    comment and add another one. The API answer is authoritative, and the
-    fallback covers a token that cannot read its own user (some fine-grained
-    tokens).
+    comment and add another one. The API answer is authoritative.
+
+    There is deliberately no fallback. Guessing the author would silently turn
+    every later run into a new duplicate comment instead of an update, which the
+    Slice 2 parser would then have to disambiguate, and the loop would read a
+    stale one. An empty string makes the caller fail with a clear message.
     """
     try:
-        login = _gh("api", "user", "--jq", ".login").strip()
-    except (subprocess.CalledProcessError, OSError):
-        # CalledProcessError: the token cannot read its own user. OSError:
-        # `gh` is missing or not executable, which would otherwise escape as a
-        # traceback and skip the fallback this function promises.
-        return fallback
-    return login or fallback
+        return _gh("api", "user", "--jq", ".login").strip()
+    except (subprocess.CalledProcessError, OSError) as error:
+        # CalledProcessError: the token cannot read its own user. OSError: `gh`
+        # is missing or not executable. Both mean the author is unknown.
+        print(f"warning: cannot determine the posting account: {error}", file=sys.stderr)
+        return ""
 
 
 def post(repo: str, pr: int, body: str, author: str) -> str:
@@ -179,7 +188,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.body_file}: {error}", file=sys.stderr)
         return 1
 
+    # An unknown author is fatal, not something to guess at: a wrong login turns
+    # every run into a new comment instead of an update, and the loop would then
+    # read whichever one the API happened to return first.
     author = args.author or resolve_author()
+    if not author:
+        print(
+            "error: cannot determine which account posts the comment. Pass --author "
+            "with the login this token posts as; guessing would silently create a "
+            "duplicate comment on every run instead of updating the existing one.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         repo = args.repo or _gh(
             "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"
