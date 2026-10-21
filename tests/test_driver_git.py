@@ -54,7 +54,8 @@ class Fixture:
     """
 
     def __init__(self, *, branch=BRANCH, status="", head="newsha", remote="oldsha",
-                 post_push=None, commit_ok=True, push_ok=True, message=None):
+                 post_push=None, commit_ok=True, push_ok=True, message=None,
+                 tracking_missing=False, ls_remote=None, ls_remote_ok=True):
         self.calls: dict[tuple, mock.MagicMock] = {
             ("rev-parse", "--abbrev-ref", "HEAD"): result(branch + "\n"),
             ("status", "--porcelain"): result(status),
@@ -69,8 +70,18 @@ class Fixture:
             ("push", "origin", f"HEAD:refs/heads/{branch}"): (
                 result() if push_ok else result(stderr="! [rejected] (non-fast-forward)", returncode=1)
             ),
-            ("rev-parse", f"refs/remotes/origin/{branch}"): result((post_push or head) + "\n"),
+            ("rev-parse", f"refs/remotes/origin/{branch}"): (
+                result(returncode=1, stderr="Needed a single revision")
+                if tracking_missing
+                else result((post_push or head) + "\n")
+            ),
         }
+        if ls_remote is not None or not ls_remote_ok:
+            self.calls[("ls-remote", "origin", f"refs/heads/{branch}")] = (
+                result(f"{ls_remote}\trefs/heads/{branch}\n", returncode=0)
+                if ls_remote_ok
+                else result(returncode=128, stderr="could not read from remote")
+            )
         self.seen: list[list[str]] = []
 
     def _git(self, args, **_kwargs):
@@ -213,10 +224,43 @@ class PushTest(unittest.TestCase):
 
     def test_the_push_is_verified_against_the_remote_ref(self):
         """A push that reports success but did not land must not look like success."""
-        fixture = Fixture(status=" M a.py\n", head="newsha", post_push="stale")
+        fixture = Fixture(
+            status=" M a.py\n", head="newsha", post_push="stale", ls_remote="stale"
+        )
         with self.assertRaises(GitError) as caught:
             fixture.run()
-        self.assertIn("refs/remotes/origin/" + BRANCH, str(caught.exception))
+        self.assertIn(f"origin/{BRANCH}", str(caught.exception))
+
+    def test_a_missing_tracking_ref_is_checked_against_the_remote(self):
+        """A single-branch clone never creates the ref for a newly pushed branch.
+
+        Pushing that branch still lands, so aborting on the absent local ref would
+        fail a push that worked - verified against a real single-branch clone.
+        """
+        fixture = Fixture(status=" M a.py\n", head="newsha", tracking_missing=True,
+                          ls_remote="newsha")
+        pushed = fixture.run()
+        self.assertEqual(pushed.commit, "newsha")
+
+    def test_a_missing_tracking_ref_does_not_hide_a_failed_push(self):
+        fixture = Fixture(status=" M a.py\n", head="newsha", tracking_missing=True,
+                          ls_remote="oldsha")
+        with self.assertRaises(GitError):
+            fixture.run()
+
+    def test_an_unreachable_remote_aborts_rather_than_assuming_success(self):
+        fixture = Fixture(status=" M a.py\n", head="newsha", tracking_missing=True,
+                          ls_remote_ok=False)
+        with self.assertRaises(GitError):
+            fixture.run()
+
+    def test_the_remote_is_not_asked_when_the_tracking_ref_matches(self):
+        """The common case must not pay for a network round trip."""
+        fixture = Fixture(status=" M a.py\n", head="newsha", post_push="newsha")
+        fixture.run()
+        self.assertEqual(
+            [args for args in fixture.seen if args and args[0] == "ls-remote"], []
+        )
 
     def test_success_reports_the_branch_and_commit(self):
         pushed = Fixture(status=" M a.py\n", head="newsha").run()

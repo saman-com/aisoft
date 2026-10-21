@@ -157,18 +157,46 @@ def commit_and_push(
 
     # Read the ref back rather than trusting the exit status: a push that did not
     # land would leave the loop waiting for a review that never comes.
-    landed = _require(
-        ["rev-parse", f"refs/remotes/{REMOTE}/{branch}"],
-        what="confirming the push",
-        cwd=cwd,
-    )
+    landed = _landed_commit(branch, head, cwd=cwd)
     if landed != head:
         raise GitError(
-            f"push did not land: refs/remotes/{REMOTE}/{branch} is {landed[:8]}, "
+            f"push did not land: {REMOTE}/{branch} is {landed[:8]}, "
             f"but HEAD is {head[:8]}"
         )
 
     return PushResult(branch=branch, commit=head, made_commit=made_commit)
+
+
+def _landed_commit(branch: str, head: str, *, cwd: str | None = None) -> str:
+    """The commit the remote has for `branch`, verified after a push.
+
+    The local remote-tracking ref is read first because it is free. It cannot be
+    trusted to exist: a single-branch clone (`actions/checkout` makes one) only
+    fetches the branch it was cloned for, so pushing any other branch lands
+    without creating `refs/remotes/origin/<branch>`. Verified against a real
+    single-branch clone: the push worked and the ref was absent.
+
+    So an absent tracking ref means "ask the remote", not "the push failed".
+    An unreachable remote is a failure: guessing success here is how the loop ends
+    up waiting ten minutes for a review of code that never arrived.
+    """
+    local = _git(["rev-parse", f"refs/remotes/{REMOTE}/{branch}"], cwd=cwd)
+    if local.returncode == 0 and local.stdout.strip():
+        return local.stdout.strip()
+
+    remote = _git(["ls-remote", REMOTE, f"refs/heads/{branch}"], cwd=cwd)
+    if remote.returncode != 0:
+        detail = (remote.stderr or remote.stdout).strip()
+        raise GitError(
+            f"cannot confirm the push to {REMOTE}/{branch}: "
+            f"{detail or remote.returncode}. The commit is local at {head[:8]}; "
+            f"check the branch on the remote before waiting for a review."
+        )
+    for line in remote.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == f"refs/heads/{branch}":
+            return fields[0]
+    return ""
 
 
 def _remote_matches(branch: str, head: str, *, cwd: str | None = None) -> bool:
