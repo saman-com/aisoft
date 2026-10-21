@@ -74,15 +74,23 @@ def _score_to_fifths(raw: object) -> int:
     return 0
 
 
-LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$")
+# `42`, `42-50`, `42 – 50`, and the float spellings `42.0` / `42.0-50.0` that
+# appear when the model writes a number as a YAML float.
+LINE_RANGE = re.compile(r"^\s*(\d+)(?:\.\d+)?\s*(?:[-–]\s*(\d+)(?:\.\d+)?)?\s*$")
 
 
 def _parse_last_line(value: object) -> int:
-    """Read the end of a line range, as written, or 0 when there isn't one."""
-    match = LINE_RANGE.findall(str(value or "")) or []
-    if not match:
+    """Read the end of a line range as written, or 0 when there isn't one.
+
+    `end_line` normally holds one number, but a model can put the whole range
+    there (`"42-50"`), in which case its last integer is the end. A float
+    spelling like `42.0` is accepted too, since YAML turns `42.0` into a float
+    and the value never reaches us as the int the schema asks for.
+    """
+    match = LINE_RANGE.match(str(value or ""))
+    if match is None:
         return _parse_line(value)
-    first, last = match[0]
+    first, last = match.groups()
     return int(last or first)
 
 

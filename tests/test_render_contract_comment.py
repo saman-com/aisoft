@@ -278,10 +278,6 @@ class AgentPromptTest(unittest.TestCase):
         self.assertEqual(self.prompt_section(out).strip(), "No issues found; no changes required.")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FailureCommentTest(unittest.TestCase):
     """A failed review must still answer the loop.
 
@@ -328,3 +324,29 @@ class ScoreBoundaryTest(unittest.TestCase):
     def test_every_band_edge(self):
         for raw, expected in ((100, "5/5"), (70, "4/5"), (50, "3/5"), (30, "2/5"), (10, "1/5"), (0, "0/5")):
             self.assertEqual(self.score_line(raw), expected, raw)
+
+
+class FloatLineTest(unittest.TestCase):
+    """YAML turns 42.0 into a float, so the schema's int never arrives."""
+
+    def location_for(self, start, end=None):
+        data = review(key_issues_to_review=[{
+            "relevant_file": "a.py",
+            "issue_header": "Bug",
+            "issue_content": "Broken.",
+            "start_line": start,
+            "end_line": end if end is not None else start,
+        }])
+        out = render_contract_comment(data)
+        section = out.split("## Issues\n", 1)[1].split("## Agent Prompt", 1)[0]
+        return section.strip().split(" — ", 1)[0][2:]
+
+    def test_float_lines_are_rendered(self):
+        self.assertEqual(self.location_for(42.0, 50.0), "a.py:42-50")
+
+    def test_a_float_range_in_one_field_is_rendered(self):
+        self.assertEqual(self.location_for("42.0-50.0"), "a.py:42-50")
+
+
+if __name__ == "__main__":
+    unittest.main()
