@@ -24,8 +24,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import driver_cycle  # noqa: E402
 import driver_loop  # noqa: E402
-from driver_comments import DEFAULT_INTERVAL, DEFAULT_TIMEOUT  # noqa: E402
+from driver_comments import DEFAULT_INTERVAL, DEFAULT_TIMEOUT, Comment  # noqa: E402
 from driver_cycle import CycleResult  # noqa: E402
 from driver_decision import Decision, Outcome  # noqa: E402
 from driver_comments import ReviewTimeout  # noqa: E402
@@ -123,6 +124,97 @@ class StoppingTest(unittest.TestCase):
         self.assertEqual(script.asked, [1, 2, 3])
         self.assertEqual(loop.final.outcome, Outcome.SUCCESS)
         self.assertEqual(len(loop.iterations), 3)
+
+
+class AlreadyCleanTest(unittest.TestCase):
+    """The loop on a PR that needs nothing: stop at once, spend no attempt.
+
+    Scripting `SUCCESS` only proves the loop reads the outcome correctly. These
+    go through the real `run_cycle` with a clean review, so the path under test is
+    the one a live run takes: the cycle decides before Pi, returns `SUCCESS`, and
+    the loop stops. It is also the case the review of PR #35 raised, where a dry
+    run on an already-clean PR was claimed to print `NOT FINISHED`.
+    """
+
+    # Score 5 with nothing listed, and score 4 with only a P2. Both are success,
+    # which is why the rule cannot be a score comparison on its own.
+    CLEAN = {
+        "five": Review(score=5, issues=(), agent_prompt="No issues found."),
+        "four_with_a_nit": Review(
+            score=4,
+            issues=("[P2] a.py:1 — Nit: rename this",),
+            agent_prompt="Optional cleanup.",
+        ),
+    }
+
+    def run_real_cycle(self, review, *, dry_run):
+        """`run_loop` with the real `run_cycle` and only its edges faked."""
+        comment = Comment(id=6328598899, body="## Confidence Score\n5/5\n", author="bot")
+        pi = mock.MagicMock()
+        push = mock.MagicMock()
+        wait = mock.MagicMock()
+        with mock.patch.object(driver_cycle, "resolve", return_value=PR), \
+             mock.patch.object(driver_cycle, "list_comments", return_value=[]), \
+             mock.patch.object(driver_cycle, "contract_comment", return_value=comment), \
+             mock.patch.object(driver_cycle, "parse_comment", return_value=review), \
+             mock.patch.object(driver_cycle, "run_pi", pi), \
+             mock.patch.object(driver_cycle, "commit_and_push", push), \
+             mock.patch.object(
+                 driver_cycle, "wait_for_contract_comment", wait
+             ), \
+             mock.patch.object(driver_loop.driver_log, "log"):
+            loop = driver_loop.run_loop(
+                repo="owner/repo", pr=31, dry_run=dry_run, quiet=True
+            )
+        return loop, pi, push, wait
+
+    def test_a_clean_pr_stops_with_success_and_never_runs_pi(self):
+        for name, review in self.CLEAN.items():
+            with self.subTest(review=name):
+                loop, pi, push, wait = self.run_real_cycle(review, dry_run=False)
+                self.assertEqual(loop.final.outcome, Outcome.SUCCESS)
+                self.assertFalse(pi.called)
+                self.assertFalse(push.called)
+                self.assertFalse(wait.called)
+
+    def test_a_clean_pr_costs_exactly_one_cycle(self):
+        """It stops after reading, before any fix is attempted.
+
+        One cycle is the read that established the PR was clean. A second would
+        re-read the same review and reach the same verdict, and `decide` counts
+        the attempts already made, so the count in the verdict must still be 0.
+        """
+        loop, _pi, _push, _wait = self.run_real_cycle(
+            self.CLEAN["five"], dry_run=False
+        )
+        self.assertEqual(len(loop.iterations), 1)
+        self.assertEqual(loop.final.iteration, 0)
+        self.assertEqual(loop.scores(), ["5/5"])
+
+    def test_a_dry_run_on_a_clean_pr_reports_success(self):
+        """The dry-run break must not pre-empt the outcome check.
+
+        `run_cycle` returns the entry decision for a dry run, and for a clean
+        review that decision is `SUCCESS`. Printing `NOT FINISHED` here would tell
+        a reader the PR needs another attempt when it does not.
+        """
+        for name, review in self.CLEAN.items():
+            with self.subTest(review=name):
+                loop, pi, push, wait = self.run_real_cycle(review, dry_run=True)
+                self.assertEqual(loop.final.outcome, Outcome.SUCCESS)
+                self.assertEqual(len(loop.iterations), 1)
+                self.assertFalse(pi.called)
+                self.assertFalse(push.called)
+                self.assertFalse(wait.called)
+
+    def test_a_dry_run_on_a_clean_pr_says_ready_not_unfinished(self):
+        loop, *_ = self.run_real_cycle(self.CLEAN["five"], dry_run=True)
+        with mock.patch.object(driver_loop.driver_log, "log") as logged:
+            status = driver_loop.announce(loop)
+        lines = [str(call.args[0]) for call in logged.call_args_list]
+        self.assertTrue(status.is_ready)
+        self.assertIn("READY FOR MERGE", lines[-1])
+        self.assertFalse(any("NOT FINISHED" in line for line in lines))
 
 
 class NumberingTest(unittest.TestCase):
