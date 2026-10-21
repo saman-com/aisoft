@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import driver  # noqa: E402
 from driver_comments import Comment, ReviewTimeout  # noqa: E402
 from driver_pr import GhFailed, NoPullRequest, PullRequest  # noqa: E402
+from parse_contract_comment import parse_comment  # noqa: E402
 
 PR = PullRequest(
     number=27,
@@ -114,6 +115,32 @@ class MainTest(unittest.TestCase):
             code = driver.main(["--branch", "slice-2-local-parser", "--repo", "o/r"])
         self.assertEqual(code, 3)
         self.assertIn("PR #27", str(stderr.write.call_args_list))
+
+    def test_the_comment_just_read_becomes_the_baseline_for_a_wait(self):
+        """T3.3/T3.4: an id-only baseline cannot see an in-place rewrite.
+
+        `--wait` without `--newer-than` must wait for the review to be *replaced*,
+        so the baseline is whatever was read before the push. Passing only an id
+        would let a rewritten comment look unchanged and time out.
+        """
+        before = Comment(9, BODY, "bot")
+        fresh = Comment(9, BODY.replace("4/5", "5/5"), "bot")
+        with mock.patch.object(driver, "resolve", return_value=PR), \
+             mock.patch.object(driver, "list_comments", return_value=[
+                 {"id": 9, "body": BODY, "user": {"login": "github-actions[bot]"}}
+             ]), \
+             mock.patch.object(driver, "contract_comment", return_value=before), \
+             mock.patch.object(
+                 driver, "parse_comment",
+                 side_effect=lambda body, **_kw: parse_comment(fresh.body),
+             ), \
+             mock.patch.object(driver, "wait_for_contract_comment", return_value=fresh) as waited:
+            code = driver.main([
+                "--pr", "27", "--repo", "owner/repo", "--wait",
+                "--baseline-body", BODY,
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(waited.call_args.kwargs.get("baseline"), BODY)
 
     def test_wait_is_optional_and_off_by_default(self):
         """Reading the current review must not block for ten minutes."""

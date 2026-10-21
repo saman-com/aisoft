@@ -91,7 +91,9 @@
   `scripts/driver_git.py` — explicit refspec, no force, remote ref verified after push;
   refuses master and a branch Pi switched to; `NothingToPush` for a no-op
 
-- [ ] **T3.3** Wait for the re-review after push
+- [x] **T3.3** Wait for the re-review after push
+  `scripts/driver_comments.py::wait_for_contract_comment` — 600 s timeout, 15 s interval,
+  freshness by body so an in-place rewrite counts as new; the old review never counts
 
 - [ ] **T3.4** End-to-end single-cycle test on a real PR
 
