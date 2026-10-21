@@ -65,7 +65,8 @@
 - [x] **T2.1** Decide driver language (recommend Python)
   Decision: Python 3, standard library only. Rationale in issue #9.
 
-- [ ] **T2.2** Implement PR detection (`gh` CLI)
+- [x] **T2.2** Implement PR detection (`gh` CLI)
+  (`scripts/driver_pr.py` — `NoPullRequest` and `GhFailed` are distinct on purpose)
 
 - [ ] **T2.3** Implement comment polling / fetching
 
