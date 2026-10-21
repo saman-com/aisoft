@@ -215,6 +215,14 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("--failure", self.text)
         self.assertIn("if: always()", self.text)
 
+    def test_the_post_step_states_the_posting_account(self):
+        """GITHUB_TOKEN cannot call GET /user, so the author must be given.
+
+        Without --author the script cannot tell which login it posts as and
+        fails, because guessing would create a duplicate comment every run.
+        """
+        self.assertIn("--author 'github-actions[bot]'", self.text)
+
     def test_render_failure_still_yields_a_comment_without_python(self):
         """The inlined printf is the last resort when the renderer itself dies.
 

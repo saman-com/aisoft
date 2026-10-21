@@ -145,6 +145,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # GITHUB_TOKEN cannot call `GET /user`, so the script cannot detect
+          # the login it posts as and must be told. The Actions token always
+          # posts as this account.
           python3 scripts/post_contract_comment.py \
             --pr "$PR_NUMBER" \
-            --body-file contract-comment.md
+            --body-file contract-comment.md \
+            --author 'github-actions[bot]'
