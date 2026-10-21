@@ -69,19 +69,52 @@ def _score_to_fifths(raw: object) -> int:
     return 0
 
 
+LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$")
+
+
+def _parse_line(value: object) -> int:
+    """Read a line number as the model wrote it, or 0 when there isn't one.
+
+    The schema types these as ints, but the value reaches us as model output, so
+    `"42"`, `42.0` and `None` all occur. Anything unusable becomes 0, which
+    `_format_location` renders as a file with no line rather than losing the
+    file too.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value > 0 else 0
+    if isinstance(value, float):
+        return int(value) if value > 0 else 0
+    match = LINE_RANGE.match(str(value or ""))
+    return int(match.group(1)) if match else 0
+
+
+def _format_location(path: str, start_raw: object, end_raw: object) -> str:
+    """Render `file:start-end`, tolerating a range written into one field.
+
+    A model can put `"42-50"` in `start_line` and leave `end_line` empty, or
+    write a range into both. Reading only the first integer from `start_line`
+    keeps the useful half of that instead of dropping the location entirely.
+    """
+    start = _parse_line(start_raw)
+    end = _parse_line(end_raw)
+    if not path:
+        return "(no location)"
+    if start < 1:
+        return path
+    if end <= start:
+        return f"{path}:{start}"
+    return f"{path}:{start}-{end}"
+
+
 def _format_issue(issue: dict) -> str:
     path = _escape_headings(str(issue.get("relevant_file") or "").strip())
     header = _escape_headings(str(issue.get("issue_header") or "").strip())
     content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
-    try:
-        start = int(issue.get("start_line") or 0)
-        end = int(issue.get("end_line") or start)
-    except (TypeError, ValueError):
-        start = end = 0
-
-    location = path if start < 1 else (f"{path}:{start}" if end <= start else f"{path}:{start}-{end}")
+    location = _format_location(path, issue.get("start_line"), issue.get("end_line"))
     title = f"{header}: " if header else ""
-    return f"- {location or '(no location)'} — {title}{content}".rstrip()
+    return f"- {location} — {title}{content}".rstrip()
 
 
 NO_OP_PROMPT = "No issues found; no changes required."
@@ -123,13 +156,8 @@ def _derive_agent_prompt(issues: list[dict]) -> str:
         path = _escape_headings(str(issue.get("relevant_file") or "").strip())
         header = _escape_headings(str(issue.get("issue_header") or "").strip())
         content = _escape_headings(" ".join(str(issue.get("issue_content") or "").split()))
-        try:
-            start = int(issue.get("start_line") or 0)
-            end = int(issue.get("end_line") or start)
-        except (TypeError, ValueError):
-            start = end = 0
-        location = path if start < 1 else (f"{path}:{start}" if end <= start else f"{path}:{start}-{end}")
-        lines.append(f"- {location or '(no location)'}: {header}. {content}".rstrip())
+        location = _format_location(path, issue.get("start_line"), issue.get("end_line"))
+        lines.append(f"- {location}: {header}. {content}".rstrip())
     lines.append("Keep each change minimal and leave the rest of the code untouched.")
     return "\n".join(lines)
 

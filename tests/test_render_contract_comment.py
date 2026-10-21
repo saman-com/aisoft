@@ -167,6 +167,38 @@ class IssuesTest(unittest.TestCase):
         out = render_contract_comment(data)
         self.assertIn("- a.py:7 — Bug: Broken.", out)
 
+    def location_for(self, start, end=None, path="a.py"):
+        data = review(key_issues_to_review=[{
+            "relevant_file": path,
+            "issue_header": "Bug",
+            "issue_content": "Broken.",
+            "start_line": start,
+            "end_line": end if end is not None else start,
+        }])
+        out = render_contract_comment(data)
+        section = out.split("## Issues\n", 1)[1].split("## Agent Prompt", 1)[0]
+        return section.strip().split(" — ", 1)[0][2:]
+
+    def test_a_range_written_into_one_field_keeps_the_file_and_line(self):
+        """A model may write "42-50" into start_line; dropping it loses the file.
+
+        The schema says int, but the value is model output. Reading the first
+        integer keeps a usable location instead of falling back to the bare file.
+        """
+        self.assertEqual(self.location_for("42-50"), "a.py:42")
+
+    def test_a_numeric_string_line_is_accepted(self):
+        self.assertEqual(self.location_for("42"), "a.py:42")
+
+    def test_a_missing_line_still_names_the_file(self):
+        self.assertEqual(self.location_for(None, None), "a.py")
+
+    def test_an_unparseable_line_still_names_the_file(self):
+        self.assertEqual(self.location_for("somewhere"), "a.py")
+
+    def test_a_missing_file_is_labelled(self):
+        self.assertEqual(self.location_for(42, path=""), "(no location)")
+
 
 class AgentPromptTest(unittest.TestCase):
     """`agent_prompt` is not in PR-Agent's schema, so it may be absent.

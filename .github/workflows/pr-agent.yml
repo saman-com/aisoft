@@ -25,12 +25,12 @@ jobs:
     # Skip PRs opened by a bot, and never try to review from forks where the
     # OpenRouter secret is unavailable.
     #
-    # The gate is on the PR author, not on the event sender: a synchronize run
-    # caused by the fix loop pushing a commit can have a bot sender, and
-    # skipping those would defeat the synchronize trigger the loop depends on.
-    if: >-
-      github.event.pull_request.user.type != 'Bot' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # Only forks are skipped. There is no bot gate: Slice 5 has Pi open the PR
+    # itself, so a bot-authored PR must still be reviewed - a bot gate would
+    # leave the loop polling for a review that is never dispatched. Re-reviewing
+    # our own pushes cannot loop forever either, because posting the contract
+    # comment does not push a commit, and Slice 4 caps the iterations.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -44,7 +44,14 @@ def _is_same_account(login: str, author: str) -> bool:
 
 
 def pick_contract_comment(comments: list[dict], author: str) -> int | None:
-    """Return the id of the newest contract comment by `author`, if any."""
+    """Return the id of the contract comment by `author`, if any.
+
+    "Newest" is by numeric id. GitHub ids are snowflakes, so they sort by
+    creation time, and the API returns comments oldest first - the last match
+    wins. If a PR somehow holds more than one, every one but the highest id is
+    stale output from an earlier version of this workflow, and updating the
+    highest keeps the parser reading the fresh one.
+    """
     newest: int | None = None
     for item in comments:
         if not isinstance(item, dict):
