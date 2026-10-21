@@ -6,8 +6,10 @@ from __future__ import annotations
 def retry_delays(attempts: int, base: float = 1.0, cap: float | None = None) -> list[float]:
     """The delay before each of `attempts` retries."""
     delays = []
-    for attempt in range(attempts + 1):
+    for attempt in range(attempts):
         delay = base * 2 ** attempt
+        if cap is not None:
+            delay = min(delay, cap)
         delays.append(delay)
     return delays
 
@@ -19,4 +21,4 @@ def total_wait(attempts: int, base: float = 1.0, cap: float | None = None) -> fl
 
 def should_retry(attempt: int, max_attempts: int) -> bool:
     """Whether another attempt is allowed after `attempt` has failed."""
-    return attempt <= max_attempts
+    return attempt < max_attempts
