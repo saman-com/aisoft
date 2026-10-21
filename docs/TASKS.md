@@ -13,7 +13,7 @@
 
 - [x] **Slice 0** – Foundation & Contracts
 - [ ] **Slice 1** – PR-Agent Review Only
-- [ ] **Slice 2** – Local Parser (Read-Only)
+- [x] **Slice 2** – Local Parser (Read-Only)
 - [ ] **Slice 3** – Single Fix Cycle
 - [ ] **Slice 4** – Full Loop (max 5 iterations)
 - [ ] **Slice 5** – Pi Creates the PR
@@ -74,7 +74,8 @@
 - [x] **T2.4** Implement robust parser
   (`scripts/parse_contract_comment.py` — strict, never defaults a score) for the three sections
 
-- [ ] **T2.5** Add clear logging of what was parsed
+- [x] **T2.5** Add clear logging
+  (`scripts/driver_log.py` and `scripts/driver.py` — failures print as ERROR, never as a score) of what was parsed
 
 **Slice 2 complete when:** Running the script against a PR that already has a review correctly prints the score and the Agent Prompt.
 
