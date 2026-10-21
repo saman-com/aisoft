@@ -71,7 +71,8 @@
 - [x] **T2.3** Implement comment polling / fetching
   (`scripts/driver_comments.py` — waits for a comment *newer than* the one already read)
 
-- [ ] **T2.4** Implement robust parser for the three sections
+- [x] **T2.4** Implement robust parser
+  (`scripts/parse_contract_comment.py` — strict, never defaults a score) for the three sections
 
 - [ ] **T2.5** Add clear logging of what was parsed
 
