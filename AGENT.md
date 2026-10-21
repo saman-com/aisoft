@@ -44,6 +44,46 @@ Useful command:
 ```bash
 gh issue list --state open --limit 50 --json number,title \
   --jq '.[] | select(.title | startswith("[T")) | "\(.number) \(.title)"' | sort
+```
+
+### 2. TDD where there is code
+Write the failing test first, then the code. Config and docs have no test; they get
+evidence instead (a parsed file, a passing linter, a real run).
+
+### 3. Close the issue with evidence
+`gh issue close <n> --comment "..."` naming the files, the test count, and what was
+actually run. Tick `docs/TASKS.md` in the same commit series.
+
+### 4. One PR per slice
+Do not open a PR until every issue in the slice is closed. Branch
+`slice-N-<description>`, title `Slice N – <name>`.
+
+---
+
+## Running Pi non-interactively
+
+The driver calls Pi like this (`scripts/driver_pi.py`):
+
+```bash
+pi --print --no-session --approve [extra args] < prompt.md
+```
+
+| Flag | Why it is there |
+|---|---|
+| `--print` | One-shot: process the prompt, write the final text to stdout, exit. |
+| `--no-session` | Each iteration starts from the repository, not from a previous iteration's session. |
+| `--approve` | Print mode cannot show the trust prompt, so an unapproved run silently skips project resources. |
+
+**The prompt goes on stdin, never in argv.** It is model-written text containing
+backticks, quotes, `$` and pipes: a shell would interpret it, and a command line
+would expose it to every process on the machine. Long reviews also exceed
+`ARG_MAX`.
+
+Pi's exit status is meaningful: non-zero means the run failed, was aborted, or was
+cut off at the model's output-token limit. Its stderr is the diagnosis. Every run
+has a deadline that kills Pi's process group, since Pi starts `git` and possibly a
+language server.
+
 ---
 
 ## Hard invariants
