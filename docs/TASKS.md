@@ -13,7 +13,7 @@
 
 - [x] **Slice 0** – Foundation & Contracts
 - [ ] **Slice 1** – PR-Agent Review Only
-- [ ] **Slice 2** – Local Parser (Read-Only)
+- [x] **Slice 2** – Local Parser (Read-Only)
 - [ ] **Slice 3** – Single Fix Cycle
 - [ ] **Slice 4** – Full Loop (max 5 iterations)
 - [ ] **Slice 5** – Pi Creates the PR
@@ -62,15 +62,20 @@
 ## Slice 2 – Local Parser (Read-Only)
 **Exit criteria:** A local script can reliably extract the Confidence Score and Agent Prompt from an existing PR-Agent comment.
 
-- [ ] **T2.1** Decide driver language (recommend Python)
+- [x] **T2.1** Decide driver language (recommend Python)
+  Decision: Python 3, standard library only. Rationale in issue #9.
 
-- [ ] **T2.2** Implement PR detection (`gh` CLI)
+- [x] **T2.2** Implement PR detection (`gh` CLI)
+  (`scripts/driver_pr.py` — `NoPullRequest` and `GhFailed` are distinct on purpose)
 
-- [ ] **T2.3** Implement comment polling / fetching
+- [x] **T2.3** Implement comment polling / fetching
+  (`scripts/driver_comments.py` — waits for a comment *newer than* the one already read)
 
-- [ ] **T2.4** Implement robust parser for the three sections
+- [x] **T2.4** Implement robust parser
+  (`scripts/parse_contract_comment.py` — strict, never defaults a score) for the three sections
 
-- [ ] **T2.5** Add clear logging of what was parsed
+- [x] **T2.5** Add clear logging
+  (`scripts/driver_log.py` and `scripts/driver.py` — failures print as ERROR, never as a score) of what was parsed
 
 **Slice 2 complete when:** Running the script against a PR that already has a review correctly prints the score and the Agent Prompt.
 
@@ -97,6 +102,10 @@
 - [ ] **T4.1** Add iteration counter and hard limit of 5
 
 - [ ] **T4.2** Implement decision logic (score == 5 → stop, else fix, else give up)
+  Success exit is `score == 5` **or** `score >= 4` with no P0/P1 issues in the
+  Issues section, since the reviewer plateaus at 4/5 while listing only
+  low-confidence findings (see PR #27). Optional follow-up: tighten
+  `extra_instructions` so only confirmed issues affect the score.
 
 - [ ] **T4.3** (Optional) Light repeated-issue detection
 
