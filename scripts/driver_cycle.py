@@ -217,6 +217,10 @@ def run_cycle(
         after_comment.body, comment_id=after_comment.id, pr=pull_request.number
     )
     if not quiet:
+        # Labelled `iteration + 1` because that is what this review is the input
+        # for: the *next* attempt. `decide` below is given `iteration`, because
+        # it counts attempts already made. Both numbers are right for their own
+        # question, and the log line would read as off-by-one otherwise.
         driver_log.log(
             driver_log.describe_review(
                 after,
@@ -227,7 +231,11 @@ def run_cycle(
         )
 
     # Attempt N just finished, so this review is the one N attempts produced.
-    decision = decide(after, iteration=iteration, pr=pull_request.number)
+    # `previous=before` is what makes a no-op fix visible: the same blocking
+    # findings coming back means Pi's changes did not touch them.
+    decision = decide(
+        after, iteration=iteration, pr=pull_request.number, previous=before
+    )
     if not quiet:
         driver_log.log(decision.message)
 

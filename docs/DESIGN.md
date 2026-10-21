@@ -288,7 +288,8 @@ The driver (bash or Python) must:
 - Exit cleanly with clear status messages
 
 Optional enhancements:
-- Detect repeated identical issues (stop early)
+- Detect repeated identical issues (stop early) — implemented as `Outcome.REPEATED`
+  (T4.3, see `docs/TASKS.md` for the rule and its guards)
 - Support dry-run mode
 - Log full conversation history
 - Notify via desktop notification or Slack when score reaches 5

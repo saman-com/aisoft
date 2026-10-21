@@ -135,7 +135,19 @@
   none. The 4/5-with-only-nits exit is therefore unreachable on a real PR until
   the contract gains a severity. Recorded in `tests/test_severity_roundtrip.py`._
 
-- [ ] **T4.3** (Optional) Light repeated-issue detection
+- [x] **T4.3** (Optional) Light repeated-issue detection
+  Implemented, not deferred. `Review.blocking_fingerprint` in
+  `scripts/parse_contract_comment.py` reduces each P0/P1 finding to a sorted
+  tuple of normalised `path:message` keys; `decide(..., previous=...)` in
+  `scripts/driver_decision.py` returns `Outcome.REPEATED` when a new review's
+  fingerprint equals the fingerprint of the review Pi was given, and the cycle
+  passes that previous review on every attempt after the first. Order, duplicate
+  bullets, line numbers, severity tags, header wording, case and trailing
+  punctuation are all normalised away, so a moved line is still the same
+  finding. A different file or a different message is not, so real progress
+  keeps the remaining attempts. Success is decided first, and an empty
+  fingerprint never counts as a repeat, so a clean review and a pair of
+  issue-free low scores both stay out of the rule.
 
 - [ ] **T4.4** Final status reporting (“Ready for merge” or “Human needed”)
 

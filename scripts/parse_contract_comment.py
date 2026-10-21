@@ -57,6 +57,23 @@ SEVERITY_TAG = re.compile(r"^\s*\[(?P<tag>[^\]]{1,16})\]\s*")
 BLOCKING_SEVERITIES = frozenset({"P0", "P1"})
 NON_BLOCKING_SEVERITIES = frozenset({"P2"})
 
+# What is dropped from a fingerprint's description: punctuation, spacing and
+# case, which vary without carrying meaning.
+FINGERPRINT_SEPARATORS = re.compile(r"[^\w]+", re.UNICODE)
+
+# What is collapsed on a location: whitespace only. A path's own `_`, `-`, `/`
+# and `.` are kept, because folding them would let `a.py` collide with `a/py`.
+FINGERPRINT_SPACE = re.compile(r"\s+")
+
+# The dash between the location and the rest of a bullet, per CONTRACT.md. All
+# three dash characters appear in practice, so any of them separates the two.
+LOCATION_SEPARATOR = re.compile(r"\s+[—–-]\s+", re.UNICODE)
+
+# The line or line range on a location (`a.py:1`, `a.py:1-2`). Dropped from a
+# fingerprint because Pi's edits move lines: the same unfixed finding is reported
+# at a new line number on the next pass.
+LOCATION_LINES = re.compile(r":\d+(?:-\d+)?$")
+
 FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 
 
@@ -85,6 +102,51 @@ def is_blocking(issue: str) -> bool:
     return severity_of(issue) not in NON_BLOCKING_SEVERITIES
 
 
+def issue_fingerprint(issue: str) -> str:
+    """A stable comparison key for one bullet, for spotting a repeated finding.
+
+    Used to answer "is this the same problem as last time", so it has to survive
+    the differences a re-review produces and ignore the ones that are noise:
+
+    - The severity tag is dropped: a finding that is still there may be reported
+      as `[P1]` on one pass and `[P0]` on the next, and it is the same problem.
+    - The line numbers are dropped, keeping the file. Pi's commit moves lines, so
+      `a.py:1` becoming `a.py:9` is the same unfixed finding, not a new one.
+    - The header (`<header>: `) is dropped. The reviewer rewords it freely and
+      the description is the part that says what is wrong.
+    - Case, punctuation and spacing are folded, so `A.PY:1 — Wrong: X.` and
+      `a.py — wrong: x` compare equal.
+
+    Deliberately not fuzzy: no edit distance, no synonym matching. A false
+    "repeated" verdict stops a loop that was making progress, which is worse
+    than the extra iterations it saves, so a description the reviewer rephrased
+    beyond recognition simply fails to match.
+    """
+    text = SEVERITY_TAG.sub("", issue, count=1).strip()
+
+    # `<location> — <header>: <description>`. The header is optional and the
+    # description may contain its own colons and dashes, so both splits take
+    # only the first separator.
+    parts = LOCATION_SEPARATOR.split(text, maxsplit=1)
+    if len(parts) == 2:
+        location, rest = parts
+    else:
+        # No dash: the whole bullet is the finding. Falling back to the whole
+        # text is safer than treating the first token as a path.
+        location, rest = "", text
+
+    location = LOCATION_LINES.sub("", location)
+    _, colon, description = rest.partition(": ")
+    body = description if colon else rest
+
+    # The location keeps its punctuation and only loses whitespace; the
+    # description loses punctuation too. Folding a path's `.` and `/` would let
+    # `a.py` and `a/py` compare equal.
+    path = FINGERPRINT_SPACE.sub("", location.lower())
+    words = FINGERPRINT_SEPARATORS.sub(" ", body.lower()).strip()
+    return " ".join(part for part in (path, " ".join(words.split())) if part)
+
+
 # A score that needs no further work on its own, regardless of the issues listed.
 SUCCESS_SCORE = 5
 
@@ -108,6 +170,16 @@ class Review:
     @property
     def blocking_count(self) -> int:
         return len(self.blocking_issues)
+
+    @property
+    def blocking_fingerprint(self) -> tuple[str, ...]:
+        """The blocking findings reduced to comparison keys, sorted.
+
+        Sorted and deduplicated so a re-review that reports the same findings in
+        a different order, or lists one twice, still compares equal. Empty when
+        nothing blocks, which is why a clean review can never look "repeated".
+        """
+        return tuple(sorted({issue_fingerprint(i) for i in self.blocking_issues}))
 
     @property
     def is_clean(self) -> bool:

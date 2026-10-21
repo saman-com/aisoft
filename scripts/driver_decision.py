@@ -34,6 +34,13 @@ have happened and none of them worked. The cycle therefore asks about `N - 1` on
 the way in (four attempts made, so a fifth may still run) and about `N` on the
 way out (five attempts made). Reading it the other way would make the fifth
 attempt a no-op and cap the loop at four fixes.
+
+**A fix that changes nothing ends the loop early.** Passing `previous=` lets the
+rule compare the blocking findings of this review with the ones Pi was given. If
+they are the same findings, the last attempt bought nothing and four more of the
+same will not help either. `Outcome.REPEATED` says that, so a caller can report
+it differently from "out of attempts". Success is still checked first: a clean
+review is never a repeat, whatever `previous` held.
 """
 
 from __future__ import annotations
@@ -50,7 +57,13 @@ class Outcome(Enum):
 
     SUCCESS = "success"
     CONTINUE = "continue"
+    # Out of attempts.
     HUMAN = "human"
+    # Still throwing, but the last attempt changed nothing. Stopping here is a
+    # judgement about the work, not about the budget, so it is its own outcome:
+    # "we ran out of tries" and "more tries are pointless" are different things
+    # for whoever picks this up, even though both end the loop.
+    REPEATED = "repeated"
 
 
 @dataclass(frozen=True)
@@ -68,7 +81,7 @@ class Decision:
 
     @property
     def is_done(self) -> bool:
-        """True when the loop should stop, for either reason."""
+        """True when the loop should stop, for any of the reasons above."""
         return self.outcome is not Outcome.CONTINUE
 
 
@@ -96,10 +109,53 @@ def _blocking_reason(review: Review, blocking: tuple[str, ...]) -> str:
     )
 
 
-def decide(review: Review, *, iteration: int, pr: int | None = None) -> Decision:
-    """Classify the review as success, continue, or human needed.
+def _repeated_message(
+    review: Review, previous: Review, iteration: int, pr: int | None
+) -> str:
+    """The line for a fix that came back with the same findings it was given.
+
+    Both scores are printed. They can differ, because the score also reflects
+    findings that are not blocking, and "still scores 3/5" would be a lie when it
+    fell from 4/5. The blocking findings being identical is the reason for the
+    verdict, so that is what the sentence is built around.
+    """
+    count = review.blocking_count
+    noun = "issue" if count == 1 else "issues"
+    if review.score == previous.score:
+        scored = f"still scores {review.score}/5"
+    elif review.score < previous.score:
+        scored = f"scored {review.score}/5, down from {previous.score}/5"
+    else:
+        scored = f"scored {review.score}/5, up from {previous.score}/5"
+    return (
+        f"{_where(pr)} {scored} after iteration {iteration}, and the same "
+        f"{count} blocking {noun} came back unchanged since iteration "
+        f"{iteration - 1}. The last fix did not touch them, so another attempt "
+        "would repeat it. A human needs to look at this PR."
+    )
+
+
+def decide(
+    review: Review,
+    *,
+    iteration: int,
+    pr: int | None = None,
+    previous: Review | None = None,
+) -> Decision:
+    """Classify the review as success, continue, human needed, or repeated.
 
     `iteration` is how many attempts have been made when this review was read.
+
+    `previous` is the review the just-finished attempt was given, so the two can
+    be compared for a fix that changed nothing. Omit it to decide on this review
+    alone, which is what the cycle does before it runs Pi: nothing has been
+    attempted yet, so there is nothing to compare.
+
+    Order matters. Success is checked first, so a clean review ends the loop even
+    if `previous` happened to carry the same (now absent) findings. The repeat
+    check then comes before the limit, so a pointless loop stops when it is
+    detected rather than when the budget runs out. The limit stays last, and
+    `iteration == 0` can never report it because nothing has been attempted.
     """
     if review.is_clean:
         if review.score >= SUCCESS_SCORE:
@@ -117,6 +173,23 @@ def decide(review: Review, *, iteration: int, pr: int | None = None) -> Decision
         return Decision(Outcome.SUCCESS, message, iteration)
 
     reason = _blocking_reason(review, review.blocking_issues)
+
+    # Same blocking findings as last time means the attempt bought nothing.
+    #
+    # Two guards make this safe. `iteration > 0` keeps the cycle's first review
+    # out of it: nothing has been attempted, so nothing can have been a no-op.
+    # The non-empty check is not redundant, because `is_clean` lets a review with
+    # no issues through at a low score: two of those fingerprint empty, would
+    # compare equal, and would report a repeat for a pair of reviews that list
+    # nothing at all. "No findings twice" is a score problem, not a no-op fix.
+    if (
+        previous is not None
+        and iteration > 0
+        and review.blocking_fingerprint
+        and review.blocking_fingerprint == previous.blocking_fingerprint
+    ):
+        message = _repeated_message(review, previous, iteration, pr)
+        return Decision(Outcome.REPEATED, message, iteration)
 
     if iteration < MAX_ITERATIONS:
         message = (

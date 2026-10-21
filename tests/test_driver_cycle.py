@@ -384,6 +384,70 @@ class DecisionTest(unittest.TestCase):
         self.assertFalse(result.pi_ran)
 
 
+class RepeatedIssueTest(unittest.TestCase):
+    """T4.3: the cycle hands the rule both reviews, so a no-op fix is visible.
+
+    The rule itself is tested in `tests/test_driver_decision.py`. What is only
+    testable here is the wiring: that the review read *before* Pi ran is the
+    baseline the new review is compared against. Passing the wrong one (or none)
+    would silently disable detection and the loop would look normal while burning
+    its whole budget.
+    """
+
+    SAME_ISSUE = "[P1] a.py:1 — Bug: loop never times out"
+
+    def fixture(self, after_issue: str) -> Fixture:
+        return Fixture(
+            before_review=Review(
+                score=4, issues=(self.SAME_ISSUE,), agent_prompt="Fix the loop."
+            ),
+            after_review=Review(
+                score=4, issues=(after_issue,), agent_prompt="Fix the loop."
+            ),
+        )
+
+    def test_the_same_issue_after_pi_stops_as_repeated(self):
+        """The real case: Pi ran, pushed, and the reviewer reported it again."""
+        fixture = self.fixture("[P1] a.py:1 — Bug: loop never times out")
+        result = fixture.run(iteration=2)
+        self.assertTrue(result.pi_ran)
+        self.assertIs(result.decision.outcome, Outcome.REPEATED)
+
+    def test_a_shifted_line_number_is_still_the_same_issue(self):
+        """Pi's commit moves lines, which must not look like a new finding."""
+        fixture = self.fixture("[P1] a.py:57 — Bug: loop never times out")
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.REPEATED)
+
+    def test_a_different_issue_after_pi_continues(self):
+        """Progress means the loop keeps its remaining attempts."""
+        fixture = self.fixture("[P1] b.py:2 — Bug: commit message missing")
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.CONTINUE)
+
+    def test_a_clean_review_after_pi_is_success_not_repeated(self):
+        """Success is decided first, so it cannot be masked by detection."""
+        fixture = Fixture(
+            before_review=Review(
+                score=4, issues=(self.SAME_ISSUE,), agent_prompt="Fix the loop."
+            ),
+            after_review=Review(score=5, issues=(), agent_prompt="No issues found."),
+        )
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_the_first_decision_of_a_cycle_is_never_a_repeat(self):
+        """Nothing has been attempted when `before` is read, so nothing is a no-op.
+
+        The entry-side `decide` call gets no `previous`. If it did, a review that
+        repeats the previous cycle's findings would stop the loop before Pi ever
+        ran, which is the opposite of what detection is for.
+        """
+        fixture = self.fixture("[P1] a.py:1 — Bug: loop never times out")
+        result = fixture.run(iteration=3, dry_run=True)
+        self.assertIs(result.decision.outcome, Outcome.CONTINUE)
+
+
 class DryRunTest(unittest.TestCase):
     def test_dry_run_reads_and_parses_but_changes_nothing(self):
         fixture = Fixture()

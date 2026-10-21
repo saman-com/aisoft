@@ -172,13 +172,18 @@ the run unchanged will not help, and the message says a human is needed.
 ### The loop stops at 5/5, or at 4/5 with nothing serious left
 
 `scripts/driver_decision.py::decide` owns the stopping rule and returns one of
-three outcomes. The cycle reads it and does nothing else about scoring:
+four outcomes. The cycle reads it and does nothing else about scoring:
 
 | Outcome | Condition | The cycle |
 |---|---|---|
 | `SUCCESS` | score 5, **or** score >= 4 with no blocking issue | stop, print ready for merge |
+| `REPEATED` | same blocking findings as the last attempt, and attempts made > 0 | stop, print human needed (a no-op fix) |
 | `CONTINUE` | not finished, and attempts made < 5 | run Pi, commit, push, wait |
 | `HUMAN` | not finished, and attempts made == 5 | stop, print human needed |
+
+Success is checked before `REPEATED`, so a clean review always ends the loop as
+a success. The limit is checked after, so `REPEATED` can stop before the limit is
+reached, which is the point of it.
 
 The 4/5 half is not a relaxation of the bar, it is the case that happens. The
 reviewer plateaus at 4/5 while listing findings it rates as minor (PR #27); a
@@ -207,6 +212,38 @@ that actually occurs (4/5 with an empty Issues section still succeeds), but the
 Fixing that is a CONTRACT.md change, which requires the renderer, `.pr_agent.toml`
 and the parser to move together. `tests/test_severity_roundtrip.py` records the
 gap and is the test that should fail first when it is closed.
+
+### A fix that changes nothing ends the loop early
+
+A loop with five attempts assumes attempts make progress. When Pi cannot fix a
+finding, or fixes it in a way the reviewer still objects to, the remaining
+attempts are paid for and buy nothing; the PR ends up needing a human anyway,
+four iterations later. `decide` therefore compares the new review's blocking
+findings against the review Pi was given on the previous attempt, and returns
+`REPEATED` when they match.
+
+The comparison key is `Review.blocking_fingerprint`: a sorted tuple of the
+normalised `path:message` of each P0/P1 finding. It must be loose about things a
+re-review changes and strict about things that mean the finding changed.
+Normalised away: line numbers and ranges, the severity tag, the header word
+before the colon, case, repeated spaces, trailing punctuation, bullet order and
+duplicate bullets. Kept: the path and the message. So `a.py:1` and `a.py:57` are
+the same finding (Pi's commit moves lines), and `a.py` and `b.py` are not. Folding
+punctuation out of the path as well would make `a.py` and `a/py` the same file,
+which is why the path is only lowercased.
+
+Two guards keep it from firing when it should not:
+
+- **`iteration > 0`.** The cycle's first decision for a review is made before any
+  attempt against it, so there is no `previous` to pass. Comparing there would
+  stop the loop before Pi ran.
+- **A non-empty fingerprint.** `is_clean` lets a review with no issues through at
+  a low score, and two such reviews both fingerprint empty. Without the guard
+  they compare equal and report a repeat for a pair of reviews that list nothing.
+  No findings twice is a score problem, not a fix that did nothing.
+
+Detection reads only blocking findings, so a reviewer reshuffling its P2 nits
+between attempts neither looks like progress nor triggers a stop.
 
 ### The contract comment is rendered by code, not by the model
 

@@ -155,10 +155,141 @@ class MessageTest(unittest.TestCase):
         self.assertIn("human", decision.message.lower())
 
     def test_every_message_names_the_pr_when_it_is_known(self):
-        for score, iteration in ((5, 1), (3, 1), (3, MAX_ITERATIONS)):
+        cases = ((5, 1), (3, 1), (3, MAX_ITERATIONS))
+        for score, iteration in cases:
             with self.subTest(score=score, iteration=iteration):
                 decision = decide(review(score), iteration=iteration, pr=42)
                 self.assertIn("#42", decision.message)
+
+
+class RepeatedTest(unittest.TestCase):
+    """T4.3: a fix that changed nothing ends the loop early.
+
+    The expensive failure this prevents is the loop spending its whole budget
+    re-running Pi against findings Pi cannot fix. `previous` is the review the
+    finished attempt was given, so the comparison is "what did this attempt buy".
+    """
+
+    BLOCKING = Review(
+        score=4,
+        issues=("[P1] a.py:1 — Bug: never times out",),
+        agent_prompt="Fix the timeout.",
+    )
+
+    def test_the_same_blocking_issue_after_a_fix_is_a_repeat(self):
+        decided = decide(review(4, "[P1] a.py:9 — Bug: never times out"),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.REPEATED)
+
+    def test_one_more_iteration_would_have_been_allowed(self):
+        """Early stop must not depend on the limit: 2 of 5 is well inside it."""
+        decided = decide(review(4, "[P1] a.py:1 — Bug: never times out"),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.REPEATED)
+        self.assertLess(decided.iteration, MAX_ITERATIONS)
+
+    def test_a_different_blocking_issue_continues(self):
+        """The loop made progress: a new finding is not a repeat."""
+        decided = decide(review(4, "[P1] b.py:2 — Bug: something else"),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.CONTINUE)
+
+    def test_a_fixed_finding_leaving_a_new_one_continues(self):
+        decided = decide(review(4, "[P1] a.py:1 — Bug: never times out",
+                                "[P1] b.py:2 — Bug: something else"),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.CONTINUE)
+
+    def test_success_wins_over_a_repeat(self):
+        """A clean review is never a repeat, even against the same previous."""
+        decided = decide(review(5), iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.SUCCESS)
+
+    def test_a_four_with_only_nits_wins_over_a_repeat(self):
+        decided = decide(review(4, "[P2] a.py:1 — Style: Nit."),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.SUCCESS)
+
+    def test_no_previous_means_no_repeat(self):
+        """Before Pi has run there is nothing to compare against."""
+        decided = decide(self.BLOCKING, iteration=1)
+        self.assertIs(decided.outcome, Outcome.CONTINUE)
+
+    def test_a_first_review_is_not_a_repeat_of_itself(self):
+        """`iteration=0` means nothing attempted, so a match cannot be a no-op."""
+        decided = decide(self.BLOCKING, iteration=0, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.CONTINUE)
+
+    def test_two_empty_fingerprints_are_not_a_repeat(self):
+        """An empty set matching an empty set is not evidence of anything.
+
+        Unreachable while `is_clean` is checked first (an empty fingerprint with
+        a blocking-free review is a success), but the guard is what keeps the
+        rule correct if that ordering is ever changed.
+        """
+        decided = decide(review(2), iteration=2, previous=review(2))
+        self.assertIsNot(decided.outcome, Outcome.REPEATED)
+
+    def test_a_repeat_stops_even_at_the_limit(self):
+        """Both stops apply; the earlier reason is reported."""
+        decided = decide(review(4, "[P1] a.py:1 — Bug: never times out"),
+                         iteration=MAX_ITERATIONS, previous=self.BLOCKING)
+        self.assertIs(decided.outcome, Outcome.REPEATED)
+
+    def test_a_repeat_counts_as_done_for_a_caller(self):
+        decided = decide(review(4, "[P1] a.py:1 — Bug: never times out"),
+                         iteration=2, previous=self.BLOCKING)
+        self.assertTrue(decided.is_done)
+
+
+class RepeatedMessageTest(unittest.TestCase):
+    PREVIOUS = Review(score=4, issues=("[P1] a.py:1 — Bug: real",), agent_prompt="F.")
+
+    def decide_repeat(self, score: int, issue: str = "[P1] a.py:1 — Bug: real"):
+        return decide(review(score, issue), iteration=2, pr=27, previous=self.PREVIOUS)
+
+    def test_it_says_the_findings_came_back(self):
+        message = self.decide_repeat(4).message
+        self.assertIn("came back unchanged", message)
+        self.assertIn("human", message.lower())
+
+    def test_it_names_the_iteration_that_changed_nothing(self):
+        message = self.decide_repeat(4).message
+        self.assertIn("iteration 2", message)
+        self.assertIn("iteration 1", message)
+
+    def test_it_says_a_same_score_is_still(self):
+        self.assertIn("still scores 4/5", self.decide_repeat(4).message)
+
+    def test_it_does_not_claim_still_after_the_score_dropped(self):
+        """The blocking findings matched, but the score fell. Say so."""
+        message = self.decide_repeat(3).message
+        self.assertIn("down from 4/5", message)
+        self.assertNotIn("still scores", message)
+
+    def test_it_does_not_claim_still_after_the_score_rose(self):
+        message = self.decide_repeat(4).message
+        self.assertIn("still scores 4/5", message)
+        rose = decide(review(4, "[P1] a.py:1 — Bug: real"), iteration=2, pr=27,
+                      previous=Review(score=3, issues=("[P1] a.py:1 — Bug: real",),
+                                      agent_prompt="F."))
+        self.assertIn("up from 3/5", rose.message)
+
+    def test_it_counted_the_issues_it_mentions(self):
+        message = decide(
+            review(4, "[P1] a.py:1 — Bug: one", "[P1] b.py:2 — Bug: two"),
+            iteration=2, pr=27,
+            previous=Review(score=4,
+                            issues=("[P1] a.py:1 — Bug: one", "[P1] b.py:2 — Bug: two"),
+                            agent_prompt="F."),
+        ).message
+        self.assertIn("2 blocking issues", message)
+
+    def test_it_uses_the_singular_for_one(self):
+        self.assertIn("1 blocking issue", self.decide_repeat(4).message)
+
+    def test_it_names_the_pr(self):
+        self.assertIn("#27", self.decide_repeat(4).message)
 
 
 if __name__ == "__main__":
