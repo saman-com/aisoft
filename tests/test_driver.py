@@ -104,6 +104,17 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("no new review", str(printed.call_args_list))
 
+    def test_a_parse_failure_names_the_pr_it_resolved_from_the_branch(self):
+        """`--branch` users must still see which PR is broken, not "PR #0"."""
+        broken = Comment(9, "not a contract comment", "bot")
+        with mock.patch.object(driver, "resolve", return_value=PR), \
+             mock.patch.object(driver, "list_comments", return_value=[]), \
+             mock.patch.object(driver, "contract_comment", return_value=broken), \
+             mock.patch("sys.stderr") as stderr:
+            code = driver.main(["--branch", "slice-2-local-parser", "--repo", "o/r"])
+        self.assertEqual(code, 3)
+        self.assertIn("PR #27", str(stderr.write.call_args_list))
+
     def test_wait_is_optional_and_off_by_default(self):
         """Reading the current review must not block for ten minutes."""
         with mock.patch.object(driver, "resolve", return_value=PR), \

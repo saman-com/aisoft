@@ -103,9 +103,11 @@ def main(argv: list[str] | None = None) -> int:
 
     repo: str = ""
     comment: Comment | None = None
+    pr_number: int = args.pr or 0
     try:
         repo = args.repo or repository()
         pull_request = _pull_request(args)
+        pr_number = pull_request.number
         if args.wait:
             comment = wait_for_contract_comment(
                 repo,
@@ -126,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             driver_log.describe_failure(
                 str(error),
-                pr=getattr(args, "pr", None) or 0,
+                pr=pr_number,
                 comment_id=comment.id if comment else None,
             ),
             file=sys.stderr,
