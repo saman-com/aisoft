@@ -84,7 +84,8 @@
 ## Slice 3 – Single Fix Cycle
 **Exit criteria:** One full cycle works: read review → give prompt to Pi → Pi fixes → commit + push → new review appears.
 
-- [ ] **T3.1** Determine Pi non-interactive invocation command
+- [x] **T3.1** Determine Pi non-interactive invocation command
+  `pi --print --no-session --approve < prompt.md` — `scripts/driver_pi.py`, documented in `AGENT.md`
 
 - [ ] **T3.2** Safe commit & push logic
 
