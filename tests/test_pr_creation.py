@@ -32,6 +32,7 @@ from driver_pr import (  # noqa: E402
     NoPullRequest,
     PullRequest,
     PullRequestExists,
+    _number_from_url,
     build_body,
     build_title,
     create_pull_request,
@@ -371,6 +372,27 @@ class CreateTest(unittest.TestCase):
         create = next(c for c in calls if "create" in c)
         self.assertEqual(create[create.index("--title") + 1], "Slice 5 – PR creation")
         self.assertEqual(create[create.index("--body") + 1], "What changed and why.")
+
+
+class NumberTest(unittest.TestCase):
+    """A line is a PR URL only when it is shaped like one."""
+
+    def test_a_pr_url_gives_its_number(self):
+        self.assertEqual(_number_from_url("https://github.com/o/r/pull/42"), 42)
+
+    def test_a_trailing_slash_is_allowed(self):
+        self.assertEqual(_number_from_url("https://github.com/o/r/pull/42/"), 42)
+
+    def test_a_bare_number_is_not_a_url(self):
+        """`gh` may print a count or a duration; neither names a pull request."""
+        self.assertIsNone(_number_from_url("12345"))
+
+    def test_a_path_that_is_not_a_pull_request_is_refused(self):
+        self.assertIsNone(_number_from_url("see /pull/7"))
+        self.assertIsNone(_number_from_url("https://github.com/o/r/issues/42"))
+
+    def test_a_warning_line_is_refused(self):
+        self.assertIsNone(_number_from_url("processed 3 items"))
 
 
 class EnsureTest(unittest.TestCase):

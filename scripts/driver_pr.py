@@ -203,9 +203,10 @@ def _clip(text: str, limit: int) -> str:
     """
     if len(text) <= limit:
         return text
-    # The ellipsis has to fit inside the limit, so it is budgeted for before the
-    # cut. Without that, a single long word would come back at exactly `limit`
-    # characters with nothing to say it had been shortened.
+    # The ellipsis is budgeted for before the cut, so a shortened title stays
+    # within `limit` instead of running past it by three characters. A cut title
+    # therefore comes back at exactly `limit` characters when there is no space to
+    # break on, and shorter when there is.
     cut = text[: limit - len("...")]
     if " " in cut:
         cut = cut[: cut.rindex(" ")]
@@ -526,8 +527,20 @@ def _open(
 
 
 def _number_from_url(url: str) -> int | None:
-    """The PR number at the end of a GitHub PR URL, or None if it is not one."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    """The PR number at the end of a GitHub PR URL, or None if it is not one.
+
+    The line has to look like a pull request URL, not merely end in digits: `gh`
+    can print a count, a duration or a warning, and reading `12345` or `see
+    /pull/7` as a PR number would attach this run to a pull request it never
+    opened. A trailing slash is allowed because gh has printed both forms.
+    """
+    path = url.strip().rstrip("/")
+    if not path.startswith(("https://", "http://")):
+        return None
+    parts = path.rsplit("/pull/", 1)
+    if len(parts) != 2:
+        return None
+    tail = parts[1]
     return int(tail) if tail.isdigit() else None
 
 
