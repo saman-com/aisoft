@@ -10,10 +10,12 @@ between *there is no PR* and *we could not ask*:
   authenticated, or returned something unparseable. Acting on this would mean
   creating a second PR beside an existing one, so it is a hard stop.
 
-Creating one is the second half. It refuses when the branch already has an open
-PR, because two PRs on one branch means two review runs and two loops fixing the
-same code. Reusing an existing PR instead of refusing is T5.2; until then the
-refusal is reported with the PR that was found, so a caller can carry on with it.
+Getting a PR, when the caller does not care whether it had to be opened, is
+`ensure_pull_request`: it returns the branch's open PR and creates one only when
+there is none. Two open PRs on one branch means two review runs and two loops
+fixing the same code, so nothing here will make a second one while the first is
+open. `create_pull_request` keeps the stricter meaning and raises
+`PullRequestExists` instead, for a caller that wants to know its PR was new.
 
 Usage:
 
@@ -96,24 +98,24 @@ def current_branch() -> str:
     return branch
 
 
-def find_pull_request(branch: str) -> PullRequest:
-    """Return the open pull request whose head is `branch`."""
+def list_pull_requests(branch: str, *, state: str = "open") -> list[PullRequest]:
+    """Every pull request whose head is `branch`, newest first.
+
+    `state` is passed to gh: `open` for the common question, `all` when a caller
+    needs to know whether the branch was already merged. An empty list is a
+    normal answer. A gh failure is `GhFailed`, never an empty list: "I could not
+    check" and "there is nothing there" lead to opposite actions, and reading the
+    first as the second is how a duplicate PR gets created.
+    """
     result = _run(
-        ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", PR_FIELDS]
+        ["gh", "pr", "list", "--head", branch, "--state", state, "--json", PR_FIELDS]
     )
     if result.returncode != 0:
-        # Deliberately not NoPullRequest: "gh failed" and "no PR" lead to
-        # opposite actions, and guessing the first is the second is how a
-        # duplicate PR gets created.
         raise GhFailed(f"gh pr list failed: {result.stderr.strip() or result.returncode}")
 
     text = result.stdout.strip()
     if not text:
-        raise NoPullRequest(
-            f"no open pull request for branch {branch!r}. "
-            "Push the branch and open one with `gh pr create`, "
-            "or run this on a branch that already has a PR."
-        )
+        return []
 
     try:
         data = json.loads(text)
@@ -121,28 +123,37 @@ def find_pull_request(branch: str) -> PullRequest:
         raise GhFailed(f"cannot parse the gh pr list output: {error}") from error
     if not isinstance(data, list):
         raise GhFailed(f"expected a list of pull requests, got {type(data).__name__}")
-    if not data:
-        raise NoPullRequest(f"no open pull request for branch {branch!r}")
 
-    # gh lists newest first; more than one entry means the branch targets
-    # several base branches. The first is the one GitHub shows.
+    pull_requests = []
     for item in data:
         if not isinstance(item, dict):
-            continue
-        state = str(item.get("state") or "").upper()
-        if state and state != "OPEN":
             continue
         number = item.get("number")
         if not isinstance(number, int):
             raise GhFailed(f"pull request without a number in {item!r}")
-        return PullRequest(
-            number=number,
-            url=str(item.get("url") or ""),
-            state=state or "OPEN",
-            head_ref=str(item.get("headRefName") or branch),
+        pull_requests.append(
+            PullRequest(
+                number=number,
+                url=str(item.get("url") or ""),
+                state=str(item.get("state") or "").upper() or "OPEN",
+                head_ref=str(item.get("headRefName") or branch),
+            )
         )
+    return pull_requests
 
-    raise NoPullRequest(f"no open pull request for branch {branch!r}")
+
+def find_pull_request(branch: str) -> PullRequest:
+    """Return the open pull request whose head is `branch`."""
+    open_now = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
+    if not open_now:
+        raise NoPullRequest(
+            f"no open pull request for branch {branch!r}. "
+            "Push the branch and open one with `gh pr create`, "
+            "or run this on a branch that already has a PR."
+        )
+    # gh lists newest first; more than one entry means the branch targets
+    # several base branches. The first is the one GitHub shows.
+    return open_now[0]
 
 
 class PullRequestExists(DriverError):
@@ -226,24 +237,33 @@ def create_pull_request(
     commits: list[str] | None = None,
     existing: PullRequest | None = None,
 ) -> PullRequest:
-    """Open a pull request for `branch`, refusing to make a second one.
+    """Open a pull request for `branch`, refusing to make a second open one.
 
-    Duplicate PRs are the failure this function is most careful about, because
-    they are hard to undo: the review workflow then runs twice, two loops fix the
-    same branch, and the branch ends up with two histories of review comments.
+    Duplicate open PRs are the failure this function is most careful about,
+    because they are hard to undo: the review workflow then runs twice, two loops
+    fix the same branch, and the branch ends up with two histories of review
+    comments.
 
-    Two things prevent it, and both are cheap:
+    An open PR on the branch is an error here rather than a return value, and
+    that is deliberate: this function's name says *create*, so returning an
+    existing PR would let a caller believe a PR it did not open was opened. A
+    caller that wants "a PR, new or existing" calls `ensure_pull_request`, which
+    is the same lookup with the opposite answer.
 
-    - `existing` lets a caller that already looked pass what it found. The lookup
-      has done the work; asking `gh pr create` to discover it again would race
-      with the workflow that also acts on the branch.
-    - When it is None, the branch is looked up once before creating. That is one
-      extra `gh pr list`, and it turns "probably no PR" into "no PR as of now".
+    - `existing` lets a caller that already looked pass what it found, so the
+      lookup is not paid for twice. It short-circuits before any `gh` call.
+    - When it is None the branch is looked up once before creating. One extra
+      `gh pr list` turns "probably no PR" into "no PR as of now".
+
+    A branch whose only PRs are closed or merged does get a new one: closing a PR
+    is not a veto on the branch, and a merged PR with new commits on top is the
+    normal second round of work. `gh` refuses that itself when the branch has
+    nothing new, and its message is passed through.
 
     It is still not a lock. Two drivers started in the same second can both find
-    no PR and both create one. That is T5.2's problem: reuse of an existing PR is
-    a different feature from creating one, and pretending one call is the other
-    is how a half-built idempotency ends up creating duplicates anyway.
+    no PR and both create one. Making that safe needs a remote-side claim (a
+    branch-specific label, or a second check after creation), which is a larger
+    change than "reuse the PR that is there".
     """
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
@@ -252,23 +272,91 @@ def create_pull_request(
             "be its own head."
         )
 
-    if existing is not None:
+    if existing is not None and existing.state == "OPEN":
         raise PullRequestExists(
             f"#{existing.number} is already open for this branch: {existing.url}",
             existing,
         )
 
     # Ask before creating, and let a broken `gh` stop us: "I could not check"
-    # must not become "there was nothing there".
-    try:
-        found = find_pull_request(branch)
-    except NoPullRequest:
-        found = None
-    if found is not None:
-        raise PullRequestExists(
-            f"#{found.number} is already open for this branch: {found.url}", found
+    # must not become "there was nothing there". `NoPullRequest` is the only
+    # error that means "go ahead", and it is caught here rather than around the
+    # whole function so a `GhFailed` keeps travelling.
+    if existing is None:
+        try:
+            found = find_pull_request(branch)
+        except NoPullRequest:
+            found = None
+        if found is not None:
+            raise PullRequestExists(
+                f"#{found.number} is already open for this branch: {found.url}", found
+            )
+
+    return _open(branch=branch, base=base, title=title, body=body, commits=commits)
+
+
+def ensure_pull_request(
+    *,
+    branch: str,
+    base: str = "master",
+    title: str | None = None,
+    body: str | None = None,
+    commits: list[str] | None = None,
+) -> tuple[PullRequest, bool]:
+    """Return the branch's open PR, opening one only when there is none.
+
+    This is the call a loop should make: it answers "there is a PR for this
+    branch" and says nothing about who opened it. The boolean says whether this
+    call created it, which is what a log line or a "first review coming up"
+    message needs; nothing else should depend on it, or the caller starts caring
+    about a difference that does not matter.
+
+    The existing PR is returned untouched, including its title and body. Rewriting
+    them here would be a second author editing a description someone may have
+    written by hand, and the review is already reading the code rather than the
+    title. `gh pr create` is reached only when the lookup found no open PR.
+
+    One `gh pr list --state all` answers both questions at once: whether an open
+    PR exists, and whether the branch has only merged ones. Asking twice would
+    leave a moment between the two answers in which the workflow could post.
+    """
+    if branch in DEFAULT_BRANCHES:
+        raise GhFailed(
+            f"refusing to open a pull request from the default branch {branch!r}. "
+            "A PR is a branch asking to be merged somewhere, and the base cannot "
+            "be its own head."
         )
 
+    # `--state all`, so a merged PR does not hide behind a missing open one.
+    found = list_pull_requests(branch, state="all")
+    open_now = [pr for pr in found if pr.state == "OPEN"]
+    if open_now:
+        return open_now[0], False
+
+    # Any PRs that were found are closed or merged, and neither is a veto: a
+    # branch whose last PR merged and then grew new commits is the normal second
+    # round. gh refuses the create itself when nothing is new, and its message is
+    # passed through, which is more accurate than a rule here guessing.
+    return (
+        _open(branch=branch, base=base, title=title, body=body, commits=commits),
+        True,
+    )
+
+
+def _open(
+    *,
+    branch: str,
+    base: str,
+    title: str | None,
+    body: str | None,
+    commits: list[str] | None,
+) -> PullRequest:
+    """Run `gh pr create`. The one place a PR is opened.
+
+    Both `create_pull_request` and `ensure_pull_request` end up here, so the
+    title and body are built in exactly one way and the "look first" rule cannot
+    be true for one caller and forgotten by the other.
+    """
     if commits is None:
         commits = []
     resolved_title = _clip(title, TITLE_LIMIT) if title else build_title(commits, branch)
@@ -303,8 +391,7 @@ def create_pull_request(
     if number is None:
         # Fall back to the lookup rather than inventing a number: the PR exists,
         # and asking for it by head ref is the same call that guards duplicates.
-        found = find_pull_request(branch)
-        return found
+        return find_pull_request(branch)
 
     return PullRequest(number=number, url=url, state="OPEN", head_ref=branch)
 
@@ -321,11 +408,16 @@ def resolve(branch: str | None = None) -> PullRequest:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Find the PR for the branch, or open one with `--create`.
+    """Find the PR for the branch, or ensure one with `--create`.
+
+    `--create` is "ensure", not "create unconditionally": an open PR is returned
+    rather than duplicated, and the output says which happened. That is the flag a
+    script wants, because it does not have to branch on whether the PR was already
+    there.
 
     Exit codes:
 
-        0  a PR was found or created
+        0  a PR was found, or created because there was none
         1  `gh` or `git` failed
         2  there is no PR for this branch, and none was asked for
     """
@@ -333,19 +425,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch", default=None, help="defaults to the current branch")
     parser.add_argument(
         "--create", action="store_true",
-        help="open a PR when the branch has none",
+        help="ensure a PR exists: reuse the open one, create only if there is none",
     )
     parser.add_argument("--base", default="master", help="the branch to merge into")
     parser.add_argument("--title", default=None)
     parser.add_argument("--body", default=None)
     args = parser.parse_args(argv)
 
+    created = False
     try:
         branch = args.branch or current_branch()
         if not args.create:
             pr = find_pull_request(branch)
         else:
-            pr = create_pull_request(
+            pr, created = ensure_pull_request(
                 branch=branch,
                 base=args.base,
                 title=args.title,
@@ -355,16 +448,16 @@ def main(argv: list[str] | None = None) -> int:
     except NoPullRequest as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    except PullRequestExists as error:
-        # A PR that is already open is the outcome the caller wanted, so this is
-        # not a failure. Say which one and print it the way a lookup would.
-        print(f"already open: {error}", file=sys.stderr)
-        pr = error.pull_request
     except (GhFailed, GitError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    verb = "created" if created else "reused"
     print(f"{pr.display} {pr.state.lower()} {pr.url}")
+    if args.create:
+        # One line saying which path was taken, because "did this just open a PR?"
+        # is the question a caller reads the output to answer.
+        print(f"{verb} the pull request for {branch}", file=sys.stderr)
     return 0
 
 

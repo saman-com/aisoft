@@ -15,6 +15,7 @@ refusal, not a merger of the two behaviours.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import unittest
@@ -34,6 +35,7 @@ from driver_pr import (  # noqa: E402
     build_body,
     build_title,
     create_pull_request,
+    ensure_pull_request,
 )
 
 
@@ -252,6 +254,140 @@ class CreateTest(unittest.TestCase):
         self.assertEqual(create[create.index("--body") + 1], "What changed and why.")
 
 
+class EnsureTest(unittest.TestCase):
+    """"Ensure a PR exists": the call a loop makes, which does not care who opened it.
+
+    The failure this prevents is a second open PR on one branch. Two workflow runs
+    then post two contract comments and two loops fix the same code while reading
+    different reviews, and there is no cheap undo.
+    """
+
+    def ensure(self, *, listed, create_result=None, **kwargs):
+        """Call `ensure_pull_request` with gh's listing and create scripted."""
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if "list" in args:
+                # One call answers both questions, so the state is `all`.
+                if "all" not in args:
+                    raise AssertionError(f"expected --state all, got {args}")
+                return gh_result(json.dumps(listed)) if listed else gh_result("[]")
+            if "create" in args:
+                return create_result if create_result is not None else gh_result(NEW_PR_URL + "\n")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with mock.patch.object(driver_pr, "_run", side_effect=fake_run):
+            pr, created = ensure_pull_request(**kwargs)
+        return pr, created, calls
+
+    def test_an_open_pr_is_reused_not_created(self):
+        pr, created, calls = self.ensure(
+            listed=[{"number": 36, "url": "https://example.test/pull/36",
+                     "state": "OPEN", "headRefName": "b"}],
+            branch="b",
+        )
+        self.assertEqual(pr.number, 36)
+        self.assertFalse(created)
+        self.assertFalse(any("create" in c for c in calls))
+
+    def test_one_list_call_answers_both_questions(self):
+        """Asking twice leaves a moment in which the workflow could post."""
+        _pr, _created, calls = self.ensure(listed=[], branch="b")
+        self.assertEqual(len([c for c in calls if "list" in c]), 1)
+
+    def test_no_pr_at_all_creates_one(self):
+        pr, created, calls = self.ensure(listed=[], branch="b", commits=["one"])
+        self.assertEqual(pr.number, 36)
+        self.assertTrue(created)
+        self.assertTrue(any("create" in c for c in calls))
+
+    def test_a_merged_pr_does_not_block_a_new_one(self):
+        """A merged PR then new commits is the normal second round."""
+        pr, created, calls = self.ensure(
+            listed=[{"number": 30, "url": "https://example.test/pull/30",
+                     "state": "MERGED", "headRefName": "b"}],
+            branch="b", commits=["more work"],
+        )
+        self.assertEqual(pr.number, 36)
+        self.assertTrue(created)
+        self.assertTrue(any("create" in c for c in calls))
+
+    def test_a_closed_pr_does_not_block_a_new_one(self):
+        """Closing a PR is not a veto on the branch."""
+        pr, created, _calls = self.ensure(
+            listed=[{"number": 30, "url": "https://example.test/pull/30",
+                     "state": "CLOSED", "headRefName": "b"}],
+            branch="b", commits=["retry"],
+        )
+        self.assertEqual(pr.number, 36)
+        self.assertTrue(created)
+
+    def test_an_open_pr_wins_over_an_older_merged_one(self):
+        """Otherwise the loop would read reviews of a branch that already landed."""
+        pr, created, calls = self.ensure(
+            listed=[
+                {"number": 30, "url": "https://example.test/pull/30",
+                 "state": "MERGED", "headRefName": "b"},
+                {"number": 36, "url": "https://example.test/pull/36",
+                 "state": "OPEN", "headRefName": "b"},
+            ],
+            branch="b",
+        )
+        self.assertEqual(pr.number, 36)
+        self.assertFalse(created)
+        self.assertFalse(any("create" in c for c in calls))
+
+    def test_a_reused_pr_keeps_its_title_and_body(self):
+        """Rewriting a description someone may have written by hand is not ours."""
+        pr, _created, calls = self.ensure(
+            listed=[{"number": 36, "url": "https://example.test/pull/36",
+                     "state": "OPEN", "headRefName": "b"}],
+            branch="b", title="a title the caller suggested", commits=["one"],
+        )
+        self.assertEqual(pr.number, 36)
+        self.assertFalse(any("edit" in str(c) or "create" in c for c in calls))
+
+    def test_a_list_failure_is_never_a_create(self):
+        """"I could not check" must not become "there was nothing there"."""
+        with mock.patch.object(driver_pr, "_run",
+                              return_value=gh_result("", 1, "not authenticated")) as run:
+            with self.assertRaises(GhFailed):
+                ensure_pull_request(branch="b")
+        self.assertFalse(any("create" in str(c) for c in run.mock_calls))
+
+    def test_ensure_refuses_the_default_branch_before_calling_gh(self):
+        for name in ("master", "main"):
+            with self.subTest(branch=name):
+                with mock.patch.object(driver_pr, "_run") as run:
+                    with self.assertRaises(GhFailed):
+                        ensure_pull_request(branch=name)
+                self.assertFalse(run.called)
+
+    def test_two_calls_in_a_row_leave_one_pr(self):
+        """The idempotency claim, stated as a sequence rather than a single call.
+
+        The second call sees the PR the first one created, which is exactly what
+        a caller retrying a failed run does.
+        """
+        listed: list[dict] = []
+
+        def fake_run(args):
+            if "list" in args:
+                return gh_result(json.dumps(listed))
+            listed.append({"number": 36, "url": NEW_PR_URL,
+                           "state": "OPEN", "headRefName": "b"})
+            return gh_result(NEW_PR_URL + "\n")
+
+        with mock.patch.object(driver_pr, "_run", side_effect=fake_run):
+            first, first_created = ensure_pull_request(branch="b", commits=["one"])
+            second, second_created = ensure_pull_request(branch="b", commits=["one"])
+        self.assertTrue(first_created)
+        self.assertFalse(second_created)
+        self.assertEqual(first.number, second.number)
+        self.assertEqual(len(listed), 1)
+
+
 class DefaultBranchTest(unittest.TestCase):
     def test_opening_a_pr_from_master_is_refused(self):
         """The base cannot also be the head, and gh would reject it less clearly."""
@@ -267,43 +403,48 @@ class CliTest(unittest.TestCase):
     def test_create_reports_the_new_pr_and_exits_zero(self):
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=["one"]), \
-             mock.patch.object(driver_pr, "find_pull_request", side_effect=NoPullRequest("none")), \
+             mock.patch.object(driver_pr, "list_pull_requests", return_value=[]), \
              mock.patch.object(driver_pr, "_run", return_value=gh_result(NEW_PR_URL)), \
-             mock.patch("sys.stdout") as out:
+             mock.patch("sys.stdout") as out, \
+             mock.patch("sys.stderr"):
             code = driver_pr.main(["--create", "--branch", "b"])
         self.assertEqual(code, 0)
         printed = "".join(c.args[0] for c in out.write.call_args_list)
         self.assertIn(NEW_PR_URL, printed)
 
-    def test_an_existing_pr_is_exit_zero_because_it_is_what_was_wanted(self):
+    def test_an_existing_pr_is_exit_zero_and_says_reused(self):
         """Asking for a PR and finding one open is success, not a failure.
 
-        The found PR is printed the way a lookup prints it, so a script that asks
-        for a PR and only reads stdout cannot tell the two apart. It does not need
-        to: it has a PR either way.
+        The found PR is printed the way a lookup prints it, and stderr says which
+        path was taken, so a caller that wants to know whether a PR was opened
+        can read it without comparing PR counts before and after.
         """
         found = PullRequest(number=27, url="https://example.test/pull/27",
                             state="OPEN", head_ref="slice-5-create-pr")
         with mock.patch.object(driver_pr, "current_branch", return_value="slice-5-create-pr"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=[]), \
-             mock.patch.object(driver_pr, "find_pull_request", return_value=found), \
+             mock.patch.object(driver_pr, "list_pull_requests", return_value=[found]), \
              mock.patch.object(driver_pr, "_run") as run, \
-             mock.patch("sys.stdout") as out:
+             mock.patch("sys.stdout") as out, \
+             mock.patch("sys.stderr") as err:
             code = driver_pr.main(["--create", "--branch", "slice-5-create-pr"])
         self.assertEqual(code, 0)
         self.assertFalse(run.called)
         printed = "".join(c.args[0] for c in out.write.call_args_list)
         self.assertIn("https://example.test/pull/27", printed)
+        said = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("reused", said)
 
     def test_a_created_pr_whose_url_gh_did_not_print_still_reports_it(self):
         """The fallback path end to end: create prints nothing useful, look it up."""
         found = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=["one"]), \
-             mock.patch.object(driver_pr, "find_pull_request",
-                               side_effect=[NoPullRequest("none"), found]), \
+             mock.patch.object(driver_pr, "list_pull_requests", return_value=[]), \
+             mock.patch.object(driver_pr, "find_pull_request", return_value=found), \
              mock.patch.object(driver_pr, "_run", return_value=gh_result("no url\n")), \
-             mock.patch("sys.stdout") as out:
+             mock.patch("sys.stdout") as out, \
+             mock.patch("sys.stderr"):
             code = driver_pr.main(["--create", "--branch", "b"])
         self.assertEqual(code, 0)
         printed = "".join(c.args[0] for c in out.write.call_args_list)
@@ -318,11 +459,23 @@ class CliTest(unittest.TestCase):
     def test_a_create_failure_exits_one(self):
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=[]), \
-             mock.patch.object(driver_pr, "find_pull_request", side_effect=NoPullRequest("none")), \
+             mock.patch.object(driver_pr, "list_pull_requests", return_value=[]), \
              mock.patch.object(driver_pr, "_run", return_value=gh_result("", 1, "no commits between")), \
              mock.patch("sys.stderr"):
             code = driver_pr.main(["--create", "--branch", "b"])
         self.assertEqual(code, 1)
+
+    def test_a_list_failure_with_create_exits_one_not_two(self):
+        """The whole point of the distinction: a broken gh is never "no PR"."""
+        with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
+             mock.patch.object(driver_pr, "commits_on_branch", return_value=[]), \
+             mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=GhFailed("not authenticated")), \
+             mock.patch("sys.stderr") as err:
+            code = driver_pr.main(["--create", "--branch", "b"])
+        self.assertEqual(code, 1)
+        said = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("not authenticated", said)
 
 
 class NoPullRequestTest(unittest.TestCase):

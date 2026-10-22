@@ -216,13 +216,30 @@
   create` with `--base`, `--head`, a title and a body. The title is the newest
   commit subject (branch name when nothing is ahead of the base), the body names
   both branches and lists the commits the base does not have. A create failure is
-  raised with gh's own message. An existing open PR is refused rather than
-  duplicated: reuse is T5.2. Live: PR #36 opened from `slice-5-live-a` with title
-  `feat: add a clamp helper`, a second `--create` reported `already open: #36` and
-  left one PR, `--create` on `master` exited 1, and a branch with no commits ahead
-  of master surfaced `GraphQL: No commits between master and ...` (exit 1).
+  raised with gh's own message. Live: PR #36 opened from `slice-5-live-a` with
+  title `feat: add a clamp helper`, `--create` on `master` exited 1, and a branch
+  with no commits ahead of master surfaced `GraphQL: No commits between master
+  and ...` (exit 1).
 
-- [ ] **T5.2** Idempotent handling (reuse existing PR if present)
+- [x] **T5.2** Idempotent handling (reuse existing PR if present)
+
+  `driver_pr.ensure_pull_request` returns the branch's open PR and creates one
+  only when there is none, plus a `created` flag for log lines. `--create` is now
+  "ensure": the first call on a branch reports `created`, the second reports
+  `reused`, and both print the same PR. A reused PR keeps its title and body,
+  because rewriting a description a human may have written is not ours. Closed or
+  merged PRs do not block a new one: a merged PR with new commits on top is the
+  normal second round, and gh refuses the create itself when nothing is new.
+  `create_pull_request` keeps the stricter meaning and raises
+  `PullRequestExists`, so a caller that wants to know its PR was new still can.
+  One `gh pr list --state all` answers both questions, so no second window opens
+  for the workflow to post in, and a list failure is `GhFailed` (exit 1), never an
+  empty result. Live: `slice-5-live-f` gave `created` then `reused` on #38 with
+  list length 1, a hand-edited title survived the reuse call, closing #38 made
+  the next call open #39 because none was open, and `GH_TOKEN=invalid` exited 1
+  with gh's 401 and created nothing.
+
+- [ ] **T5.3** Full start-to-finish integration test
 
 - [ ] **T5.3** Full start-to-finish integration test
 

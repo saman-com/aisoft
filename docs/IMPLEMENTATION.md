@@ -138,7 +138,7 @@ The driver can take a PR from score < 5 to either 5/5 or the iteration limit wit
 | ID | Ticket | Description |
 |----|--------|-------------|
 | T5.1 | PR creation logic | `gh pr create` with sensible title/body. Refuses when a PR is already open |
-| T5.2 | Idempotency | If a PR already exists for the branch, reuse it instead of refusing |
+| T5.2 | Idempotency | If an open PR exists for the branch, reuse it (`ensure_pull_request`); create only when none is open |
 | T5.3 | Integration test | From a clean branch → Pi finishes work → PR is created → loop starts |
 
 **Exit criteria:**  

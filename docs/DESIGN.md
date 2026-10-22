@@ -149,8 +149,13 @@ calling `gh pr create`:
 
 - **It looks first.** The branch is checked for an open PR before creating one,
   because two PRs on one branch means two review runs and two loops fixing the
-  same code, with no cheap undo. When one exists it raises `PullRequestExists`
-  carrying the PR it found; reusing that PR instead of refusing is T5.2.
+  same code, with no cheap undo. `ensure_pull_request` returns the PR it found;
+  `create_pull_request` raises `PullRequestExists` carrying it, for a caller that
+  needs to know its PR was new. `--create` uses the ensure form, so running it
+  twice is safe and the second run says `reused`.
+- **A closed or merged PR does not block a new one.** A branch whose PR merged
+  and then grew new commits is the normal second round. gh refuses the create
+  itself when the branch has nothing new, and that message is passed through.
 - **It writes the title and body from git.** The title is the newest commit
   subject, or the branch name when the branch has no commits ahead of the base.
   The body names the branches and lists the commits the base does not have. Both
