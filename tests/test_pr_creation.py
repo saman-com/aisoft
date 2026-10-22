@@ -125,6 +125,18 @@ class BodyTest(unittest.TestCase):
         line = next(l for l in body.splitlines() if l.startswith("- "))
         self.assertLessEqual(len(line), COMMIT_LIMIT + 2)
 
+    def test_an_unread_commit_list_is_not_described_as_empty(self):
+        """`None` means nobody looked; `[]` means the base has everything.
+
+        A caller that omits `commits` has not read git, so the body must not claim
+        the branch has nothing ahead of the base - it has to say the list was not
+        read, which is the one thing that is true either way.
+        """
+        body = build_body(branch="b", base="master", commits=None)
+        self.assertNotIn("No commits", body)
+        self.assertNotIn("Commits on this branch", body)
+        self.assertIn("not listed", body)
+
 
 class CreateTest(unittest.TestCase):
     def create(self, *, runs, **kwargs):
@@ -320,6 +332,16 @@ class CreateTest(unittest.TestCase):
         )
         create = next(c for c in calls if "create" in c)
         self.assertEqual(create[create.index("--base") + 1], "develop")
+
+    def test_an_omitted_commit_list_is_not_reported_as_an_empty_branch(self):
+        """The body gh receives must not say "No commits" about a branch with work."""
+        _, calls = self.create(
+            runs={"pr list": gh_result("[]"), "pr create": gh_result(NEW_PR_URL)},
+            branch="b",
+        )
+        create = next(c for c in calls if "create" in c)
+        body = create[create.index("--body") + 1]
+        self.assertNotIn("No commits", body)
 
     def test_a_supplied_title_and_body_reach_gh(self):
         _, calls = self.create(

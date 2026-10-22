@@ -213,7 +213,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 def build_body(
-    *, branch: str, base: str, commits: list[str], body: str | None = None
+    *, branch: str, base: str, commits: list[str] | None, body: str | None = None
 ) -> str:
     """The PR description: the caller's words, then what the branch contains.
 
@@ -221,6 +221,12 @@ def build_body(
     description knows more than this function can derive. The generated part is
     the commit list, which is also the one part that is always true: it comes from
     git, not from a summary of it.
+
+    `commits` of None and `commits` of [] are different answers and are described
+    differently. [] means the list was read and the base has everything the branch
+    has. None means nobody read git at all, so claiming "no commits" would state
+    something the caller never checked - a caller that omits the argument gets a
+    body that says the list was not read.
     """
     if body is not None and body.strip():
         return body
@@ -229,6 +235,12 @@ def build_body(
         f"Opened from `{branch}` into `{base}`.",
         "",
     ]
+    if commits is None:
+        # Not read, so not described. `gh pr create` is happier with a short body
+        # than with one that contradicts the diff a reviewer is looking at.
+        lines.append(f"The commits on `{branch}` were not listed for this body.")
+        return "\n".join(lines) + "\n"
+
     subjects = [line.strip() for line in commits if line.strip()]
     if subjects:
         lines.append(f"Commits on this branch ({len(subjects)}):")
@@ -439,9 +451,14 @@ def _open(
     title and body are built in exactly one way and the "look first" rule cannot
     be true for one caller and forgotten by the other.
     """
-    if commits is None:
-        commits = []
-    resolved_title = _clip(title, TITLE_LIMIT) if title else build_title(commits, branch)
+    # `commits` stays None when the caller did not read git: `build_title` and
+    # `build_body` each describe that case, rather than being handed a `[]` that
+    # claims the branch has nothing ahead of its base.
+    resolved_title = (
+        _clip(title, TITLE_LIMIT)
+        if title
+        else build_title(commits or [], branch)
+    )
     resolved_body = build_body(branch=branch, base=base, commits=commits, body=body)
 
     # `--head` is explicit so the PR is opened from the branch that was asked
