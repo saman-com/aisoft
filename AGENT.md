@@ -205,10 +205,12 @@ Four properties matter:
   earlier iteration: the wait takes it as its baseline, so it returns only when
   the review of the newest push replaces it. Without that baseline the first
   cycle would act on a stale verdict, and a stale 5/5 would stop the loop and
-  call the branch ready on code the review never saw. The trade is that a reused
-  PR with no new review coming waits and times out (exit 2, "nothing to do") -
-  loud, and fixed by running without `--create`, which reads the review already
-  there.
+  call the branch ready on code the review never saw. When the newest comment is
+  at least as new as the newest commit (`last_commit_time` vs
+  `driver_comments.comment_time`) the review is already current, so `start`
+  returns without waiting: rerunning `--create` on a branch that was just
+  reviewed proceeds instead of timing out (exit 2) on a review it already has.
+  If either timestamp is unknown, the wait still happens.
 - **Progress is a new review, not elapsed time.** The wait between attempts is the
   cycle's own content-based wait: a review counts only when its comment id is
   newer than the one just handled. A loop that advanced on a timer would re-read
@@ -354,9 +356,9 @@ that, so the cost of one extra `gh pr list` is always worth paying.
   two separate moments. With two open PRs for the branch the call raises
   `GhFailed` rather than picking one: the review would be attached to whichever
   PR it picked, and every later push would follow that guess. The same rule
-  applies when `gh pr create` succeeds but prints no readable URL, since the
-  number then comes from a lookup that cannot tell this run's PR from another
-  run's.
+  applies when `gh pr create` succeeds but prints no readable URL: the number is
+  then unknown, and a lookup cannot tell this run's PR from another run's, so
+  `_open` raises `GhFailed` instead of filling the number in from the branch.
 - One open PR is only accepted when its number is the one the create reported.
   A single open PR is *not* proof it is this run's: the other run may have won
   the race and this run's create may have printed nothing usable, or failed.

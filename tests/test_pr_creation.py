@@ -456,6 +456,21 @@ class EnsureTest(unittest.TestCase):
         self.assertEqual(pr.number, 36)
         self.assertTrue(made)
 
+    def test_a_create_that_prints_no_number_is_not_filled_in_by_a_lookup(self):
+        """The one open PR a lookup finds may be another run's.
+
+        Returning it would hand back a PR this run did not create, and the loop
+        would then push fixes to it while the review read the other one.
+        """
+        with self.assertRaises(GhFailed) as raised:
+            self.ensure(
+                listed=[],
+                branch="b",
+                commits=["one"],
+                create_result=gh_result("no url\n"),
+            )
+        self.assertIn("printed no readable PR number", str(raised.exception))
+
     def test_a_reused_pr_keeps_its_title_and_body(self):
         """Rewriting a description someone may have written by hand is not ours."""
         pr, _created, calls = self.ensure(
@@ -553,20 +568,24 @@ class CliTest(unittest.TestCase):
         said = "".join(c.args[0] for c in err.write.call_args_list)
         self.assertIn("reused", said)
 
-    def test_a_created_pr_whose_url_gh_did_not_print_still_reports_it(self):
-        """The fallback path end to end: create prints nothing useful, look it up."""
-        found = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+    def test_a_created_pr_whose_url_gh_did_not_print_exits_one(self):
+        """A create that prints no number leaves this run's PR unknown.
+
+        The single open PR a lookup would find may be another run's, so returning
+        it would make the loop push fixes to one PR while the review read the
+        other. An unknown number is reported instead of guessed.
+        """
+        other = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=["one"]), \
              mock.patch.object(driver_pr, "list_pull_requests",
-                               side_effect=[[], [found], [found]]), \
+                               side_effect=[[], [other]]), \
              mock.patch.object(driver_pr, "_run", return_value=gh_result("no url\n")), \
-             mock.patch("sys.stdout") as out, \
-             mock.patch("sys.stderr"):
+             mock.patch("sys.stderr") as err:
             code = driver_pr.main(["--create", "--branch", "b"])
-        self.assertEqual(code, 0)
-        printed = "".join(c.args[0] for c in out.write.call_args_list)
-        self.assertIn(NEW_PR_URL, printed)
+        self.assertEqual(code, 1)
+        said = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("printed no readable PR number", said)
 
     def test_a_lookup_without_create_and_no_pr_exits_two(self):
         with mock.patch.object(driver_pr, "find_pull_request", side_effect=NoPullRequest("none")), \

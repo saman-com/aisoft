@@ -387,6 +387,39 @@ class CommitsOnBranchTest(unittest.TestCase):
         self.assertEqual(subjects, [])
 
 
+class LastCommitTimeTest(unittest.TestCase):
+    """Whether a review is already current depends on when the newest push landed."""
+
+    def test_the_pushed_commit_time_is_returned(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("1700000000\n")) as git:
+            self.assertEqual(driver_git.last_commit_time(BRANCH), 1_700_000_000.0)
+        self.assertEqual(
+            git.call_args.args[0],
+            ["log", "-1", "--format=%ct", "refs/remotes/origin/" + BRANCH],
+        )
+
+    def test_a_missing_tracking_ref_falls_back_to_the_local_branch(self):
+        """`actions/checkout` makes single-branch clones without those refs."""
+        seen = []
+
+        def fake_git(args, **_kwargs):
+            seen.append(list(args))
+            return result("1700000000\n") if len(seen) == 2 else result(returncode=128)
+
+        with mock.patch.object(driver_git, "_git", side_effect=fake_git):
+            self.assertEqual(driver_git.last_commit_time(BRANCH), 1_700_000_000.0)
+        self.assertEqual(seen[1], ["log", "-1", "--format=%ct", BRANCH])
+
+    def test_an_unreadable_history_is_unknown_not_old(self):
+        """A zero would make any comment look current; None keeps the wait."""
+        with mock.patch.object(driver_git, "_git", return_value=result(returncode=128)):
+            self.assertIsNone(driver_git.last_commit_time(BRANCH))
+
+    def test_unparseable_output_is_unknown(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("yesterday\n")):
+            self.assertIsNone(driver_git.last_commit_time(BRANCH))
+
+
 class GitHelperTest(unittest.TestCase):
     def test_git_is_never_run_through_a_shell(self):
         with mock.patch.object(driver_git.subprocess, "run", return_value=result("x")) as run:

@@ -446,24 +446,21 @@ def _open(
             f"{detail or result.returncode}"
         )
 
-    # gh prints the new PR's URL on stdout. Creating the PR and failing to read
-    # it back is still a success: the PR exists, and a caller that treats it as a
-    # failure would retry and try to create a second one.
+    # gh prints the new PR's URL on stdout. The PR exists at this point, but the
+    # number is only trustworthy when gh printed it: a lookup answers with the
+    # branch's open PRs, not with this call's, so a single open PR may just as
+    # well be one another run opened a moment earlier. Returning that PR would
+    # hand the caller something it did not create, and every later push would
+    # follow the guess while the review read the other PR. An unknown number is
+    # therefore reported, not filled in from the branch.
     url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
     number = _number_from_url(url)
     if number is None:
-        # The number has to be looked up, but a lookup answers with the branch's
-        # open PRs, not with this call's. One open PR is therefore the one just
-        # created; two means one of them belongs to someone else and there is no
-        # way to tell which, so guessing would act on the wrong PR.
-        open_now = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
-        if len(open_now) == 1:
-            return open_now[0]
         raise GhFailed(
-            f"gh created a pull request for {branch!r} but printed no number, and "
-            f"looking it up found {len(open_now)} open pull requests for that "
-            "branch, so there is no single PR this run can say it created. Check "
-            "the branch on GitHub before running again."
+            f"gh created a pull request for {branch!r} but printed no readable PR "
+            f"number (output: {url or '(empty)'!r}), so this run cannot tell which "
+            "pull request it opened. Check the branch on GitHub, then run again to "
+            "reuse it."
         )
 
     return PullRequest(number=number, url=url, state="OPEN", head_ref=branch)
