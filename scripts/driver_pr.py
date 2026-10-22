@@ -400,6 +400,12 @@ def _refuse_a_second_open(created: PullRequest) -> None:
     second open one" is a promise of `create_pull_request` as much as of
     `ensure_pull_request`; leaving the check to the ensure path only would let a
     direct caller return a PR while a duplicate sits beside it.
+
+    The two-moment gap cannot be closed from here without a lock gh does not
+    offer. When two runs race, both can arrive at this check, both can see two
+    open PRs, and both stop. That is the intended trade-off: stopping leaves two
+    PRs a person closes by hand, while picking a winner risks pushing to a PR the
+    review is not reading.
     """
     open_now = [
         pr for pr in list_pull_requests(created.head_ref) if pr.state == "OPEN"
