@@ -36,7 +36,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import driver_loop  # noqa: E402
-from driver_comments import Comment, ReviewTimeout  # noqa: E402
+from driver_comments import Comment, ReviewTimeout, comment_time  # noqa: E402
 from driver_cycle import CycleResult  # noqa: E402
 from driver_decision import Decision, Outcome  # noqa: E402
 from driver_pr import GhFailed, PullRequest  # noqa: E402
@@ -89,6 +89,7 @@ class StartTest(unittest.TestCase):
         ensure_error: Exception | None = None,
         wait_error: Exception | None = None,
         existing: Comment | None = None,
+        pushed_at: float | None = None,
         **kwargs,
     ):
         script = Script(outcomes or [Outcome.SUCCESS])
@@ -107,10 +108,14 @@ class StartTest(unittest.TestCase):
         # waiting so the wait can start from it.
         listing = mock.MagicMock(return_value=[] if existing is None else [existing])
         current = mock.MagicMock(return_value=existing)
+        # When the newest commit was written. None is "cannot tell", which keeps
+        # the wait: acting on a review that may be stale is the worse mistake.
+        pushed = mock.MagicMock(return_value=pushed_at)
         self.listing = listing
         self.current = current
         with mock.patch.object(driver_loop, "ensure_pull_request", ensure), \
              mock.patch.object(driver_loop, "commits_on_branch", commits), \
+             mock.patch.object(driver_loop, "last_commit_time", pushed), \
              mock.patch.object(driver_loop, "wait_for_contract_comment", wait), \
              mock.patch.object(driver_loop, "list_comments", listing), \
              mock.patch.object(driver_loop, "contract_comment", current), \
@@ -169,12 +174,60 @@ class StartTest(unittest.TestCase):
         first cycle then acts on a verdict from a previous round instead of the
         review of the newest push.
         """
-        stale = Comment(id=700, body="## Confidence Score\n3/5\n", author="github-actions[bot]")
+        stale = Comment(
+            id=700,
+            body="## Confidence Score\n3/5\n",
+            author="github-actions[bot]",
+            updated_at="2026-10-21T05:00:00Z",
+        )
         _loop, _ensure, wait, _commits, _script, _logged = self.run_start(
-            created=False, existing=stale
+            created=False, existing=stale, pushed_at=comment_time(stale) + 60
         )
         self.assertIs(wait.call_args.kwargs["baseline"], stale)
         self.listing.assert_called_once_with("owner/repo", NEW_PR.number)
+
+    def test_a_reused_pr_whose_review_is_already_current_does_not_wait(self):
+        """Rerunning `--create` on a just-reviewed branch must not time out.
+
+        The newest comment was written after the newest commit, so it is the
+        review of that commit. Waiting for a rewrite that is not coming would
+        block until the timeout and report "nothing to do" for a PR whose review
+        is right there.
+        """
+        current = Comment(
+            id=700,
+            body="## Confidence Score\n5/5\n",
+            author="github-actions[bot]",
+            updated_at="2026-10-22T10:00:00Z",
+        )
+        loop, _ensure, wait, _commits, script, logged = self.run_start(
+            created=False, existing=current, pushed_at=comment_time(current) - 60
+        )
+        self.assertFalse(wait.called)
+        self.assertEqual(script.asked, [1])
+        self.assertEqual(loop.pr.number, NEW_PR.number)
+        self.assertIn("already covers the newest push", " ".join(self.lines(logged)))
+
+    def test_a_reused_pr_with_an_unknown_commit_time_still_waits(self):
+        """A missing timestamp is not "current": the wait stays the safe choice."""
+        stale = Comment(
+            id=700,
+            body="## Confidence Score\n3/5\n",
+            author="github-actions[bot]",
+            updated_at="2026-10-21T05:00:00Z",
+        )
+        _loop, _ensure, wait, _commits, _script, _logged = self.run_start(
+            created=False, existing=stale, pushed_at=None
+        )
+        self.assertIs(wait.call_args.kwargs["baseline"], stale)
+
+    def test_a_comment_with_no_updated_at_still_waits(self):
+        """A `Comment` built without `updated_at` has no time to compare."""
+        stale = Comment(id=700, body="## Confidence Score\n3/5\n", author="github-actions[bot]")
+        _loop, _ensure, wait, _commits, _script, _logged = self.run_start(
+            created=False, existing=stale, pushed_at=1_700_000_000.0
+        )
+        self.assertIs(wait.call_args.kwargs["baseline"], stale)
 
     def test_a_reused_pr_with_no_review_yet_still_waits_from_scratch(self):
         """Reused is not the same as "already reviewed".

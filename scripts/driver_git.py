@@ -215,6 +215,27 @@ def commits_on_branch(
     return [line for line in completed.stdout.splitlines() if line.strip()]
 
 
+def last_commit_time(branch: str, *, cwd: str | None = None) -> float | None:
+    """When the newest pushed commit on `branch` was written, as a Unix timestamp.
+
+    A PR is a snapshot of what was pushed, so `refs/remotes/<remote>/<branch>` is
+    the ref to ask about: a local commit nobody pushed yet is not what the review
+    looks at. A missing tracking ref (a single-branch clone does not create them
+    for other branches) falls back to the local branch, and an unreadable history
+    answers None - which every caller treats as "cannot tell" rather than as
+    "old": guessing either way would decide for the operator whether to wait.
+    """
+    for ref in (f"refs/remotes/{REMOTE}/{branch}", branch):
+        completed = _git(["log", "-1", "--format=%ct", ref], cwd=cwd)
+        if completed.returncode != 0:
+            continue
+        try:
+            return float(completed.stdout.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _landed_commit(branch: str, head: str, *, cwd: str | None = None) -> str:
     """The commit the remote has for `branch`, verified after a push.
 

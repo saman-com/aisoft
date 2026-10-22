@@ -73,13 +73,20 @@ from driver_comments import (
     WORKFLOW_AUTHOR,
     DriverError,
     ReviewTimeout,
+    comment_time,
     contract_comment,
     list_comments,
     wait_for_contract_comment,
 )
 from driver_cycle import CycleResult, NoReview, repository, run_cycle, summarize
 from driver_decision import Decision, Outcome
-from driver_git import GitError, NothingToPush, commits_on_branch, current_branch
+from driver_git import (
+    GitError,
+    NothingToPush,
+    commits_on_branch,
+    current_branch,
+    last_commit_time,
+)
 from driver_iteration import MAX_ITERATIONS, IterationLimit, check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError
@@ -168,13 +175,13 @@ def start(
     comment that is already there, which makes the wait mean "wait for the review
     of the newest push".
 
-    The cost of that choice is worth stating: a reused PR whose review is already
-    current has no rewrite coming, so `--create` waits and times out (exit 2,
-    "nothing to do") instead of starting. That is the loud half of the trade. The
-    quiet half - reading a review written before the newest push and stopping on
-    its verdict - would declare a branch ready for merge on code it never covered.
-    A caller that wants to act on the review already on the PR runs without
-    `--create`, which reads it at once and needs no wait.
+    A reused PR whose newest comment is at least as new as the newest commit is
+    already reviewed: there is no rewrite coming, and waiting would block until
+    the timeout and then report "nothing to do" on a PR that has a valid current
+    review. Rerunning `--create` on a branch that was just reviewed is the common
+    case, so that review is returned and the loop starts at once. When the
+    comparison cannot be made (no commit time, no `updated_at`) the wait still
+    happens, because acting on a review that may be stale is the worse mistake.
 
     A caller-supplied `pr` must match what the branch actually has. The cycle
     commits to the checked-out branch, so acting on a different PR would push a fix
@@ -210,6 +217,36 @@ def start(
             f"{verb} PR #{pull_request.number} for {branch!r} into {base!r} "
             f"({count} {noun}): {pull_request.url}"
         )
+
+    baseline = None
+    already_current = None
+    if not created:
+        # Reused, so whatever the poster already wrote is the review of an earlier
+        # push and is what the wait has to beat. `contract_comment` returns the
+        # newest one, or `None` for a PR someone opened by hand and the workflow
+        # has not reached yet - then waiting from scratch is right.
+        baseline = contract_comment(list_comments(repo, pull_request.number), author)
+        if baseline is not None:
+            # A comment written after the newest commit is the review of that
+            # commit, not of an earlier push, so there is nothing left to wait
+            # for. Comparing timestamps is what makes a plain rerun of `--create`
+            # proceed instead of timing out on a review it already has.
+            pushed_at = last_commit_time(branch)
+            reviewed_at = comment_time(baseline)
+            if (
+                pushed_at is not None
+                and reviewed_at is not None
+                and reviewed_at >= pushed_at
+            ):
+                already_current = baseline
+    if already_current is not None:
+        if not quiet:
+            driver_log.log(
+                f"the review on #{pull_request.number} already covers the newest "
+                "push; starting the loop"
+            )
+        return pull_request
+    if not quiet:
         # A reused PR may already have a review, so what is being waited for is the
         # one the newest push produces; saying "the first review" there would
         # promise something that may already have arrived.
@@ -218,14 +255,6 @@ def start(
             f"waiting up to {timeout:.0f}s for {wanted} "
             f"(polling every {interval:.0f}s)"
         )
-
-    baseline = None
-    if not created:
-        # Reused, so whatever the poster already wrote is the review of an earlier
-        # push and is what the wait has to beat. `contract_comment` returns the
-        # newest one, or `None` for a PR someone opened by hand and the workflow
-        # has not reached yet - then waiting from scratch is right.
-        baseline = contract_comment(list_comments(repo, pull_request.number), author)
     wait_for_contract_comment(
         repo,
         pull_request.number,

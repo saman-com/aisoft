@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +25,7 @@ from driver_comments import (  # noqa: E402
     DEFAULT_INTERVAL,
     DEFAULT_TIMEOUT,
     ReviewTimeout,
+    comment_time,
     contract_comment,
     wait_for_contract_comment,
 )
@@ -312,6 +314,26 @@ class BaselineTest(unittest.TestCase):
             )
         self.assertIn("5/5", found.body)
 
+
+class CommentTimeTest(unittest.TestCase):
+    """A comment's `updated_at` as a timestamp, so it can be compared to a commit."""
+
+    def test_an_iso_timestamp_with_z_becomes_a_unix_time(self):
+        self.assertEqual(
+            comment_time(
+                Comment(id=1, body="x", author="a", updated_at="2026-10-21T05:00:00Z")
+            ),
+            datetime(2026, 10, 21, 5, tzinfo=timezone.utc).timestamp(),
+        )
+
+    def test_an_empty_updated_at_is_unknown(self):
+        """`Comment`'s default is empty; 0 would make every comment look current."""
+        self.assertIsNone(comment_time(Comment(id=1, body="x", author="a")))
+
+    def test_an_unparseable_updated_at_is_unknown(self):
+        self.assertIsNone(
+            comment_time(Comment(id=1, body="x", author="a", updated_at="not a time"))
+        )
 
 
 if __name__ == "__main__":

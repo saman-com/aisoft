@@ -44,6 +44,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 # The first line every contract comment starts with, per CONTRACT.md.
@@ -151,6 +152,22 @@ def _to_comment(raw: dict) -> Comment | None:
         author=str(user.get("login") or ""),
         updated_at=str(raw.get("updated_at") or ""),
     )
+
+
+def comment_time(comment: Comment) -> float | None:
+    """When GitHub last wrote `comment`, as a Unix timestamp, or None.
+
+    `updated_at` is an ISO string and is empty when the caller built the
+    `Comment` itself. An unknown time answers None rather than 0: a comparison
+    against 0 would make every such comment look current.
+    """
+    text = comment.updated_at.strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def _same_account(login: str, author: str) -> bool:
