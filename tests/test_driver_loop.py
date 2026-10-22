@@ -477,6 +477,23 @@ class MainTest(unittest.TestCase):
         self.assertIn("no attempt was made", lines[0])
         self.assertIn("NOT FINISHED", lines[-1])
 
+    def test_a_dry_run_that_stops_on_continue_exits_zero(self):
+        """A dry run that changed nothing is a run that completed, so exit 0.
+
+        The PR is not ready and the headline says so. The exit code describes the
+        run, not the PR: a dry run did what it was asked to do. Anything else
+        would make "dry run a PR that needs work" look like a failure in a script
+        that only checks the exit code.
+        """
+        loop = driver_loop.LoopResult(iterations=(result(Outcome.CONTINUE, 1),))
+        with mock.patch.object(driver_loop, "run_loop", return_value=loop), \
+             mock.patch.object(driver_loop.driver_log, "log") as logged:
+            code = driver_loop.main(["--pr", "31", "--repo", "owner/repo", "--dry-run"])
+        lines = [str(call.args[0]) for call in logged.call_args_list]
+        self.assertEqual(code, 0)
+        self.assertIn("no attempt was made", lines[0])
+        self.assertIn("NOT FINISHED", lines[-1])
+
     def test_an_iteration_past_the_limit_is_refused_before_any_cycle_runs(self):
         """`--iteration 6` must not start a run whose first cycle would refuse it.
 

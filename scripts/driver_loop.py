@@ -33,6 +33,13 @@ Exit codes follow the rest of the driver: 0 the loop ran to a verdict (whatever
 the verdict was), 1 the environment or the loop failed, 2 there was nothing to
 do, 3 the review did not satisfy the contract.
 
+A dry run is the one case where 0 does not mean "reached a verdict". It changes
+nothing, so when the PR is not already clean it stops on `CONTINUE`: the loop
+says another attempt is due without claiming one happened. That is a successful
+dry run, so it exits 0 and the status line says `NOT FINISHED - ANOTHER ATTEMPT
+IS DUE`. Reading the exit code as "the PR is ready" is what the headline is for;
+the code only says the run itself completed.
+
 Usage:
 
     python3 scripts/driver_loop.py --dry-run
