@@ -29,6 +29,14 @@ Three things are worth stating because they are easy to get wrong:
 - **A dry run runs once.** Nothing changes, so a second pass would read the same
   review and print the same thing.
 
+With `--create` the loop also starts the run: it ensures the branch has a pull
+request (opening one only when none is open), waits for the first contract review,
+and then runs the cycles against that PR. Without it nothing is looked up and the
+first cycle must find its own PR and review, which is what Slice 4 did.
+
+`--create` and `--dry-run` are refused together. A dry run promises to change
+nothing, and opening a pull request is a change.
+
 Exit codes follow the rest of the driver: 0 the loop ran to a verdict (whatever
 the verdict was), 1 the environment or the loop failed, 2 there was nothing to
 do, 3 the review did not satisfy the contract.
@@ -42,6 +50,7 @@ the code only says the run itself completed.
 
 Usage:
 
+    python3 scripts/driver_loop.py --create        # no PR yet: create, then loop
     python3 scripts/driver_loop.py --dry-run
     python3 scripts/driver_loop.py --pr 31 --repo owner/name
     python3 scripts/driver_loop.py --iteration 3   # resume a half-run loop
@@ -58,14 +67,30 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import driver_log
-from driver_comments import DEFAULT_INTERVAL, DEFAULT_TIMEOUT, DriverError, ReviewTimeout
+from driver_comments import (
+    DEFAULT_INTERVAL,
+    DEFAULT_TIMEOUT,
+    WORKFLOW_AUTHOR,
+    DriverError,
+    ReviewTimeout,
+    comment_time,
+    contract_comment,
+    list_comments,
+    wait_for_contract_comment,
+)
 from driver_cycle import CycleResult, NoReview, repository, run_cycle, summarize
 from driver_decision import Decision, Outcome
-from driver_git import GitError, NothingToPush
+from driver_git import (
+    GitError,
+    NothingToPush,
+    commits_on_branch,
+    current_branch,
+    last_commit_time,
+)
 from driver_iteration import MAX_ITERATIONS, IterationLimit, check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError
-from driver_pr import GhFailed, NoPullRequest, PullRequest
+from driver_pr import GhFailed, NoPullRequest, PullRequest, ensure_pull_request
 from driver_status import Status, report
 from parse_contract_comment import ParseError
 
@@ -116,12 +141,141 @@ class LoopResult:
         return shown
 
 
+def start(
+    *,
+    repo: str,
+    branch: str,
+    pr: int | None = None,
+    base: str = "master",
+    timeout: float = DEFAULT_TIMEOUT,
+    interval: float = DEFAULT_INTERVAL,
+    author: str = WORKFLOW_AUTHOR,
+    quiet: bool = False,
+) -> PullRequest:
+    """Get the branch a PR, and wait for the review this run should act on.
+
+    Returns the PR. This is the step Slice 4 did not have: a run that starts from a branch with
+    commits and no pull request. Two things happen, in this order, and the order
+    is the whole point:
+
+    - **Ensure the PR.** `driver_pr.ensure_pull_request` is the only place a PR is
+      opened, so a branch that already has one is reused by the same call and
+      there is no second create path to keep in step with the first.
+    - **Wait for a review.** `run_cycle` raises `NoReview` when the PR has no
+      contract comment, and a PR opened a second ago never does: the workflow has
+      not run yet. Waiting here is what lets the first cycle read a review instead
+      of failing on a fresh PR.
+
+    The wait needs a baseline, and a created PR and a reused one need opposite
+    ones. A PR that was just created has no contract comment at all, so `None` is
+    right there: the first one that appears is the review of the first push,
+    whatever its id. A reused PR already has one, and that comment describes an
+    earlier iteration, so waiting with no baseline would return at once and the
+    first cycle would act on a stale verdict. For a reused PR the baseline is the
+    comment that is already there, which makes the wait mean "wait for the review
+    of the newest push".
+
+    A reused PR whose newest comment is at least as new as the newest commit is
+    already reviewed: there is no rewrite coming, and waiting would block until
+    the timeout and then report "nothing to do" on a PR that has a valid current
+    review. Rerunning `--create` on a branch that was just reviewed is the common
+    case, so that review is returned and the loop starts at once. When the
+    comparison cannot be made (no commit time, no `updated_at`) the wait still
+    happens, because acting on a review that may be stale is the worse mistake.
+
+    A caller-supplied `pr` must match what the branch actually has. The cycle
+    commits to the checked-out branch, so acting on a different PR would push a fix
+    for one review onto another.
+
+    `base` must be a different branch. `--branch feature --base feature` gives an
+    empty `git log` and asks `gh` to open a PR from a branch into itself, which is
+    refused deeper down with a message that does not say why.
+    """
+    if branch == base:
+        raise LoopError(
+            f"{branch!r} cannot be its own base. A pull request is a branch asking "
+            "to be merged into another one, so --base has to name a different "
+            "branch than --branch."
+        )
+    commits = commits_on_branch(branch, base=base)
+    pull_request, created = ensure_pull_request(
+        branch=branch, base=base, commits=commits
+    )
+    if pr is not None and pull_request.number != pr:
+        raise LoopError(
+            f"PR #{pr} is not the open pull request for {branch!r} "
+            f"(that branch has #{pull_request.number}). The loop commits to the "
+            "checked-out branch, so it can only act on the PR for that branch."
+        )
+    if not quiet:
+        # `created` is reported and nothing else depends on it: the loop acts on
+        # the PR, and who opened it does not change what happens next.
+        verb = "created" if created else "reused"
+        count = len(commits)
+        noun = "commit" if count == 1 else "commits"
+        driver_log.log(
+            f"{verb} PR #{pull_request.number} for {branch!r} into {base!r} "
+            f"({count} {noun}): {pull_request.url}"
+        )
+
+    baseline = None
+    already_current = None
+    if not created:
+        # Reused, so whatever the poster already wrote is the review of an earlier
+        # push and is what the wait has to beat. `contract_comment` returns the
+        # newest one, or `None` for a PR someone opened by hand and the workflow
+        # has not reached yet - then waiting from scratch is right.
+        baseline = contract_comment(list_comments(repo, pull_request.number), author)
+        if baseline is not None:
+            # A comment written after the newest commit is the review of that
+            # commit, not of an earlier push, so there is nothing left to wait
+            # for. Comparing timestamps is what makes a plain rerun of `--create`
+            # proceed instead of timing out on a review it already has.
+            pushed_at = last_commit_time(branch)
+            reviewed_at = comment_time(baseline)
+            if (
+                pushed_at is not None
+                and reviewed_at is not None
+                and reviewed_at >= pushed_at
+            ):
+                already_current = baseline
+    if already_current is not None:
+        if not quiet:
+            driver_log.log(
+                f"the review on #{pull_request.number} already covers the newest "
+                "push; starting the loop"
+            )
+        return pull_request
+    if not quiet:
+        # A reused PR may already have a review, so what is being waited for is the
+        # one the newest push produces; saying "the first review" there would
+        # promise something that may already have arrived.
+        wanted = "the first review" if created else "a review of the newest push"
+        driver_log.log(
+            f"waiting up to {timeout:.0f}s for {wanted} "
+            f"(polling every {interval:.0f}s)"
+        )
+    wait_for_contract_comment(
+        repo,
+        pull_request.number,
+        baseline=baseline,
+        timeout=timeout,
+        interval=interval,
+        author=author,
+    )
+    if not quiet:
+        driver_log.log(f"the review on #{pull_request.number} is in; starting the loop")
+    return pull_request
+
+
 def run_loop(
     *,
     repo: str,
     start_iteration: int = 1,
     branch: str | None = None,
     pr: int | None = None,
+    create: bool = False,
+    base: str = "master",
     dry_run: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
     interval: float = DEFAULT_INTERVAL,
@@ -139,9 +293,40 @@ def run_loop(
     The default is resolved here rather than in the signature. A `= run_cycle`
     default would be bound when this module is imported, so replacing
     `driver_loop.run_cycle` to test the seam would silently have no effect.
+
+    `create=True` runs `start` first: ensure the PR, wait for the review that is
+    not the one already read, and then loop against that PR. It is refused with
+    `dry_run`, which promises to change nothing, and opening a PR is a change.
     """
     perform = cycle if cycle is not None else run_cycle
     check_iteration(start_iteration)
+    if create and dry_run:
+        raise LoopError(
+            "--create cannot be combined with --dry-run: a dry run changes nothing, "
+            "and opening a pull request is a change. Run --create on its own, or "
+            "--dry-run on the PR that already exists."
+        )
+
+    if create:
+        # The branch is resolved once, here, and handed to every cycle below: the
+        # PR was ensured for this branch, and a cycle that resolved a different one
+        # would push the fix somewhere the review is not.
+        branch = branch or current_branch()
+        pull_request = start(
+            repo=repo,
+            branch=branch,
+            pr=pr,
+            base=base,
+            timeout=timeout,
+            interval=interval,
+            author=author or WORKFLOW_AUTHOR,
+            quiet=quiet,
+        )
+        # The number comes from the PR that was ensured, not from the caller, so
+        # every cycle below acts on the PR this run actually started against. A
+        # mismatch between an explicit `pr` and the branch was refused in `start`.
+        pr = pull_request.number
+
     if not quiet:
         driver_log.log(
             f"loop: starting at {describe_iteration(start_iteration)}, "
@@ -230,6 +415,17 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="first attempt of this run, 1..5; a value outside that range is refused",
     )
+    parser.add_argument(
+        "--create",
+        action="store_true",
+        help=(
+            "ensure the branch has a PR (create only if none is open), wait for a "
+            "review newer than the one it already has, then loop"
+        ),
+    )
+    parser.add_argument(
+        "--base", default="master", help="the branch the PR is opened against"
+    )
     parser.add_argument("--dry-run", action="store_true", help="read and parse, change nothing")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
@@ -242,6 +438,8 @@ def main(argv: list[str] | None = None) -> int:
             start_iteration=args.iteration,
             branch=args.branch,
             pr=args.pr,
+            create=args.create,
+            base=args.base,
             dry_run=args.dry_run,
             timeout=args.timeout,
             interval=args.interval,

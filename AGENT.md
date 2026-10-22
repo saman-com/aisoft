@@ -195,10 +195,22 @@ there is another. The rule is one line: `CONTINUE` advances the iteration and
 waits for a newer review, and any other outcome stops and prints the verdict once
 via `report()`.
 
-Three properties matter:
+Four properties matter:
 
 - **The cap is checked at both ends.** `check_iteration` gates the starting
   iteration and every step, so no combination of arguments reaches attempt 6.
+- **`--create` waits from the right baseline.** A PR this run created has no
+  contract comment, so the wait takes no baseline and the first one to appear is
+  the first review. A reused PR already has one, and that comment describes an
+  earlier iteration: the wait takes it as its baseline, so it returns only when
+  the review of the newest push replaces it. Without that baseline the first
+  cycle would act on a stale verdict, and a stale 5/5 would stop the loop and
+  call the branch ready on code the review never saw. When the newest comment is
+  at least as new as the newest commit (`last_commit_time` vs
+  `driver_comments.comment_time`) the review is already current, so `start`
+  returns without waiting: rerunning `--create` on a branch that was just
+  reviewed proceeds instead of timing out (exit 2) on a review it already has.
+  If either timestamp is unknown, the wait still happens.
 - **Progress is a new review, not elapsed time.** The wait between attempts is the
   cycle's own content-based wait: a review counts only when its comment id is
   newer than the one just handled. A loop that advanced on a timer would re-read
@@ -320,6 +332,64 @@ so a caller that cannot tell "needs a human" from "gh is broken" will page
 someone about the wrong thing. `EXIT_CODES` in `driver_status.py` is where that
 mapping lives, and a test scans every `Outcome` against it so a new one cannot be
 added without a code.
+
+### The PR is looked for before it is created
+
+`scripts/driver_pr.py::create_pull_request` opens a PR with `gh pr create`, and
+the order inside it is the invariant: **look, then create.** Two PRs on one
+branch means two workflow runs post two contract comments, and two driver loops
+fix the same code while reading different reviews. There is no cheap undo for
+that, so the cost of one extra `gh pr list` is always worth paying.
+
+- A PR that is already open raises `PullRequestExists` carrying it. Until T5.2
+  lands, callers refuse and report the URL rather than creating a second one.
+- `gh pr list` failing is `GhFailed`, never "no PR". "I could not check" must
+  not become "there was nothing there", because the next step would be creating
+  a duplicate.
+- A `gh pr create` failure is raised with gh's own stderr. Its reasons (branch
+  not pushed, no commits between the branches, no permission) are each fixed
+  differently, so replacing the message with a status code destroys the only
+  actionable part.
+- Opening from `master` or `main` is refused before `gh` runs. A PR is a branch
+  asking to merge somewhere, and the base cannot be its own head.
+- A create is followed by one more lookup, because the lookup and the create are
+  two separate moments. With two open PRs for the branch the call raises
+  `GhFailed` rather than picking one: the review would be attached to whichever
+  PR it picked, and every later push would follow that guess. The same rule
+  applies when `gh pr create` succeeds but prints no readable URL: the number is
+  then unknown, and a lookup cannot tell this run's PR from another run's, so
+  `_open` raises `GhFailed` instead of filling the number in from the branch.
+- One open PR is only accepted when its number is the one the create reported.
+  A single open PR is *not* proof it is this run's: the other run may have won
+  the race and this run's create may have printed nothing usable, or failed.
+  Either way the loop would push fixes to one PR while the review read the other,
+  so a mismatch raises `GhFailed` naming both numbers.
+- A **failed** create is looked at too. Another run can open the PR between the
+  lookup and the create, and gh then refuses the second one with "a pull request
+  already exists", which on its own reads as a create problem rather than "the
+  branch has a PR, just not this run's". `_open` raises `CreateFailed` (a
+  `GhFailed` subclass) for exactly this reason, so the check cannot mistake a
+  failed *lookup* after a successful create for a failed create. If the follow-up
+  lookup finds an open PR, the error says it is a duplicate and still quotes gh's
+  message; if it finds none, gh's message is re-raised unchanged. A failed
+  follow-up lookup never replaces the create error.
+- `driver_loop.start` refuses `--branch` equal to `--base` before either `git`
+  or `gh` runs. Git would report no commits and `gh` would reject a PR into
+  itself, both with a message that does not name the mistake.
+
+The title and body come from git, never from a summary of it: the newest commit
+subject (or the branch name when nothing is ahead of the base) and the list of
+commits the base does not have. `<remote>/<base>..<branch>` is the range; the
+obvious-looking `<remote>/<branch>..<branch>` is always empty because a branch
+contains itself.
+
+**An unreadable base is never replaced by the branch's own history.**
+`commits_on_branch` returns an empty list and writes a warning to stderr naming
+the ref and suggesting `git fetch <remote>`. Falling back to the last 50 commits
+on the branch would list work the base may already have, and the body says these
+are the commits the base does not have. An empty list is also what a branch with
+nothing ahead of its base looks like, so the warning is what keeps the two
+readable apart.
 
 ### The contract comment is rendered by code, not by the model
 

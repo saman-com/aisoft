@@ -25,6 +25,7 @@ rather than passed in, so the iteration number is always in the history.
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 
 REMOTE = "origin"
@@ -167,6 +168,74 @@ def commit_and_push(
     return PushResult(branch=branch, commit=head, made_commit=made_commit)
 
 
+def commits_on_branch(
+    branch: str,
+    *,
+    base: str = "master",
+    remote: str = REMOTE,
+    cwd: str | None = None,
+) -> list[str]:
+    """The subjects of the commits `branch` has that the base branch does not.
+
+    This is what a pull request description is made of: the work on the branch,
+    oldest first, which is the order a reader expects when following a branch
+    from where it left the base. A body that lists commits is a summary a
+    reviewer can check against the diff, and nothing has to be invented to write
+    it.
+
+    The range is `<remote>/<base>..<branch>`, not `<remote>/<branch>..<branch>`:
+    the second is always empty, because a branch contains itself.
+
+    When the base cannot be read (a clone that never fetched it, or a base branch
+    with a name nobody told us) this returns an empty list and says so on stderr.
+    Falling back to the last commits on the branch would list work the base may
+    already have, which is the one thing the list must never do: the body says
+    these are the commits the base does not have. An empty list is the honest
+    answer, and the warning is what keeps it from being a silent one - the caller
+    can fetch the base and try again instead of shipping a description that
+    contradicts the diff.
+
+    Returning an empty list is not an error: a branch with nothing ahead of its
+    base gets the same answer, and failing to list commits must not stop a PR from
+    being opened.
+    """
+    completed = _git(
+        ["log", "--reverse", "--format=%s", f"{remote}/{base}..{branch}"], cwd=cwd
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        print(
+            f"warning: cannot list the commits {branch!r} has that "
+            f"{remote}/{base} does not ({detail or completed.returncode}); "
+            "the commit list is left empty rather than guessed. "
+            f"Run `git fetch {remote}` and try again.",
+            file=sys.stderr,
+        )
+        return []
+    return [line for line in completed.stdout.splitlines() if line.strip()]
+
+
+def last_commit_time(branch: str, *, cwd: str | None = None) -> float | None:
+    """When the newest pushed commit on `branch` was written, as a Unix timestamp.
+
+    A PR is a snapshot of what was pushed, so `refs/remotes/<remote>/<branch>` is
+    the ref to ask about: a local commit nobody pushed yet is not what the review
+    looks at. A missing tracking ref (a single-branch clone does not create them
+    for other branches) falls back to the local branch, and an unreadable history
+    answers None - which every caller treats as "cannot tell" rather than as
+    "old": guessing either way would decide for the operator whether to wait.
+    """
+    for ref in (f"refs/remotes/{REMOTE}/{branch}", branch):
+        completed = _git(["log", "-1", "--format=%ct", ref], cwd=cwd)
+        if completed.returncode != 0:
+            continue
+        try:
+            return float(completed.stdout.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _landed_commit(branch: str, head: str, *, cwd: str | None = None) -> str:
     """The commit the remote has for `branch`, verified after a push.
 
@@ -231,7 +300,6 @@ def main(argv: list[str] | None = None) -> int:
     Exit codes: 0 pushed, 1 failed, 2 nothing to push.
     """
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(description="Stage, commit and push Pi's changes.")
     parser.add_argument("--iteration", type=int, required=True)

@@ -139,10 +139,35 @@ Contains:
 2. Pi finishes the implementation.
 3. Driver script runs:
    ```bash
-   gh pr create --title "..." --body "..."
+   python3 scripts/driver_pr.py --create
    ```
    or detects an existing open PR.
 4. Push triggers the GitHub Action → PR-Agent starts reviewing.
+
+Creation is `driver_pr.create_pull_request`, and it does two things beyond
+calling `gh pr create`:
+
+- **It looks first.** The branch is checked for an open PR before creating one,
+  because two PRs on one branch means two review runs and two loops fixing the
+  same code, with no cheap undo. `ensure_pull_request` returns the PR it found;
+  `create_pull_request` raises `PullRequestExists` carrying it, for a caller that
+  needs to know its PR was new. `--create` uses the ensure form, so running it
+  twice is safe and the second run says `reused`.
+- **It looks again after creating.** The lookup and the create are two separate
+  moments, so another run can open a PR in between. Both entry points check that
+  the branch has only the PR they created, and stop with the numbers to close
+  rather than hand back one of two.
+- **A closed or merged PR does not block a new one.** A branch whose PR merged
+  and then grew new commits is the normal second round. gh refuses the create
+  itself when the branch has nothing new, and that message is passed through.
+- **It writes the title and body from git.** The title is the newest commit
+  subject, or the branch name when the branch has no commits ahead of the base.
+  The body names the branches and lists the commits the base does not have. Both
+  are derived, so neither can contradict the diff.
+
+A `gh pr create` failure is raised with gh's own message rather than mapped to a
+status code, because the reasons (branch not pushed, no commits between the
+branches, no permission) are each fixed differently.
 
 ### Phase B – Review Loop (max 5 iterations)
 

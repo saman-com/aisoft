@@ -32,6 +32,7 @@ from driver_git import (  # noqa: E402
     GitError,
     NothingToPush,
     build_message,
+    commits_on_branch,
 )
 
 BRANCH = "slice-3-single-fix-cycle"
@@ -305,6 +306,118 @@ class MainTest(unittest.TestCase):
     def test_iteration_is_required(self):
         with self.assertRaises(SystemExit):
             driver_git.main([])
+
+
+class CommitsOnBranchTest(unittest.TestCase):
+    """The commit list a pull request body is built from.
+
+    A PR body that lists the branch's work is only useful if the list is the work
+    the base branch does not have. `<remote>/<branch>..<branch>` is empty by
+    construction, so the range has to be against the base.
+    """
+
+    def run_log(self, *results):
+        seen = []
+
+        def fake_git(args, **_kwargs):
+            seen.append(list(args))
+            return results[len(seen) - 1]
+
+        # A failed range is reported on stderr, which these cases trigger on
+        # purpose; keep it out of the test output.
+        with mock.patch.object(driver_git, "_git", side_effect=fake_git), \
+             mock.patch("sys.stderr"):
+            subjects = commits_on_branch(BRANCH)
+        return subjects, seen
+
+    def test_the_range_is_against_the_base_branch(self):
+        _, seen = self.run_log(result("one\n"))
+        self.assertEqual(seen[0], ["log", "--reverse", "--format=%s", "origin/master.." + BRANCH])
+
+    def test_the_base_branch_is_configurable(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("one\n")) as git:
+            commits_on_branch(BRANCH, base="develop")
+        self.assertIn("origin/develop.." + BRANCH, git.call_args.args[0])
+
+    def test_the_remote_is_configurable(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("one\n")) as git:
+            commits_on_branch(BRANCH, remote="upstream")
+        self.assertIn("upstream/master.." + BRANCH, git.call_args.args[0])
+
+    def test_subjects_are_returned_oldest_first(self):
+        """A reader follows the branch from where it left the base."""
+        subjects, _ = self.run_log(result("first\nsecond\nthird\n"))
+        self.assertEqual(subjects, ["first", "second", "third"])
+
+    def test_blank_lines_are_dropped(self):
+        subjects, _ = self.run_log(result("one\n\n  \ntwo\n"))
+        self.assertEqual(subjects, ["one", "two"])
+
+    def test_a_missing_base_ref_is_not_replaced_by_the_branch_history(self):
+        """The fallback would list commits the base may already have.
+
+        The body claims these are the commits the base does not have, so guessing
+        with the branch's own history makes the description contradict the diff.
+        An empty list is the honest answer, and git is not asked a second
+        question whose answer would be about a different range.
+        """
+        subjects, seen = self.run_log(result(returncode=128, stderr="unknown revision"))
+        self.assertEqual(subjects, [])
+        self.assertEqual(len(seen), 1)
+
+    def test_a_missing_base_ref_says_so_instead_of_going_quiet(self):
+        """An empty list is also what a branch with no work ahead looks like.
+
+        Without a warning the two are indistinguishable, and the operator reads an
+        empty commit list as "there is nothing to describe" rather than "the base
+        was never fetched".
+        """
+        with mock.patch.object(driver_git, "_git",
+                               return_value=result(returncode=128, stderr="unknown revision")), \
+             mock.patch("sys.stderr") as err:
+            commits_on_branch(BRANCH)
+        said = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("unknown revision", said)
+        self.assertIn("git fetch", said)
+        self.assertIn("origin/master", said)
+
+    def test_an_unreadable_history_returns_nothing_rather_than_raising(self):
+        """Failing to list commits must not stop a PR from being opened."""
+        subjects, _ = self.run_log(result(returncode=128))
+        self.assertEqual(subjects, [])
+
+
+class LastCommitTimeTest(unittest.TestCase):
+    """Whether a review is already current depends on when the newest push landed."""
+
+    def test_the_pushed_commit_time_is_returned(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("1700000000\n")) as git:
+            self.assertEqual(driver_git.last_commit_time(BRANCH), 1_700_000_000.0)
+        self.assertEqual(
+            git.call_args.args[0],
+            ["log", "-1", "--format=%ct", "refs/remotes/origin/" + BRANCH],
+        )
+
+    def test_a_missing_tracking_ref_falls_back_to_the_local_branch(self):
+        """`actions/checkout` makes single-branch clones without those refs."""
+        seen = []
+
+        def fake_git(args, **_kwargs):
+            seen.append(list(args))
+            return result("1700000000\n") if len(seen) == 2 else result(returncode=128)
+
+        with mock.patch.object(driver_git, "_git", side_effect=fake_git):
+            self.assertEqual(driver_git.last_commit_time(BRANCH), 1_700_000_000.0)
+        self.assertEqual(seen[1], ["log", "-1", "--format=%ct", BRANCH])
+
+    def test_an_unreadable_history_is_unknown_not_old(self):
+        """A zero would make any comment look current; None keeps the wait."""
+        with mock.patch.object(driver_git, "_git", return_value=result(returncode=128)):
+            self.assertIsNone(driver_git.last_commit_time(BRANCH))
+
+    def test_unparseable_output_is_unknown(self):
+        with mock.patch.object(driver_git, "_git", return_value=result("yesterday\n")):
+            self.assertIsNone(driver_git.last_commit_time(BRANCH))
 
 
 class GitHelperTest(unittest.TestCase):
