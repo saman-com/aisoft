@@ -233,6 +233,30 @@ class CreateTest(unittest.TestCase):
             created = create_pull_request(branch="slice-5-create-pr")
         self.assertEqual(created.number, 27)
 
+    def test_an_unreadable_url_with_two_open_prs_is_refused(self):
+        """The lookup answers with the branch's PRs, not with this call's.
+
+        With one open PR there is only one thing it can be. With two, picking one
+        would hand the caller a PR this run may not have created, and every later
+        read and push would follow that guess.
+        """
+        two = (
+            '[{"number": 36, "url": "https://example.test/pull/36",'
+            ' "state": "OPEN", "headRefName": "b"},'
+            ' {"number": 37, "url": "https://example.test/pull/37",'
+            ' "state": "OPEN", "headRefName": "b"}]'
+        )
+        with mock.patch.object(
+            driver_pr, "_run", side_effect=[
+                gh_result("[]"),
+                gh_result("something unexpected\n", stderr=""),
+                gh_result(two),
+            ]
+        ):
+            with self.assertRaises(GhFailed) as raised:
+                create_pull_request(branch="b")
+        self.assertIn("2 open pull requests", str(raised.exception))
+
     def test_the_base_branch_is_configurable(self):
         _, calls = self.create(
             runs={"pr list": gh_result("[]"), "pr create": gh_result(NEW_PR_URL)},
@@ -263,18 +287,33 @@ class EnsureTest(unittest.TestCase):
     """
 
     def ensure(self, *, listed, create_result=None, **kwargs):
-        """Call `ensure_pull_request` with gh's listing and create scripted."""
+        """Call `ensure_pull_request` with gh's listing and create scripted.
+
+        `gh pr create` is simulated by adding the new PR to the listing, so the
+        lookup after it sees what a real create would have left behind.
+        """
         calls = []
+        rows = list(listed)
 
         def fake_run(args):
             calls.append(args)
             if "list" in args:
-                # One call answers both questions, so the state is `all`.
-                if "all" not in args:
-                    raise AssertionError(f"expected --state all, got {args}")
-                return gh_result(json.dumps(listed)) if listed else gh_result("[]")
+                # gh filters by state itself, so the scripted listing has to as
+                # well: `--state open` never returns the merged or closed ones.
+                shown = rows
+                if args[args.index("--state") + 1] == "open":
+                    shown = [row for row in rows if row["state"] == "OPEN"]
+                return gh_result(json.dumps(shown)) if shown else gh_result("[]")
             if "create" in args:
-                return create_result if create_result is not None else gh_result(NEW_PR_URL + "\n")
+                result = (
+                    create_result
+                    if create_result is not None
+                    else gh_result(NEW_PR_URL + "\n")
+                )
+                if result.returncode == 0:
+                    rows.insert(0, {"number": 36, "url": NEW_PR_URL,
+                                    "state": "OPEN", "headRefName": "b"})
+                return result
             raise AssertionError(f"unexpected command: {args}")
 
         with mock.patch.object(driver_pr, "_run", side_effect=fake_run):
@@ -291,10 +330,16 @@ class EnsureTest(unittest.TestCase):
         self.assertFalse(created)
         self.assertFalse(any("create" in c for c in calls))
 
-    def test_one_list_call_answers_both_questions(self):
-        """Asking twice leaves a moment in which the workflow could post."""
+    def test_one_list_call_answers_both_questions_before_creating(self):
+        """Asking twice before creating leaves a moment in which gh could open one."""
         _pr, _created, calls = self.ensure(listed=[], branch="b")
-        self.assertEqual(len([c for c in calls if "list" in c]), 1)
+        before_create = []
+        for call in calls:
+            if "create" in call:
+                break
+            before_create.append(call)
+        self.assertEqual(len([c for c in before_create if "list" in c]), 1)
+        self.assertIn("all", before_create[0])
 
     def test_no_pr_at_all_creates_one(self):
         pr, created, calls = self.ensure(listed=[], branch="b", commits=["one"])
@@ -337,6 +382,25 @@ class EnsureTest(unittest.TestCase):
         self.assertEqual(pr.number, 36)
         self.assertFalse(created)
         self.assertFalse(any("create" in c for c in calls))
+
+    def test_a_second_open_pr_after_the_create_is_reported_not_picked(self):
+        """Two drivers can both pass the lookup; the loser must not pick a PR.
+
+        Acting on one of two open PRs means fixing code for a review that may be
+        attached to the other one, so this stops and says what to close.
+        """
+        first = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+        second = PullRequest(
+            number=37, url="https://example.test/pull/37", state="OPEN", head_ref="b"
+        )
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [first, second]]), \
+             mock.patch.object(driver_pr, "_run",
+                               return_value=gh_result(NEW_PR_URL + "\n")):
+            with self.assertRaises(GhFailed) as raised:
+                ensure_pull_request(branch="b", commits=["one"])
+        self.assertIn("#36", str(raised.exception))
+        self.assertIn("#37", str(raised.exception))
 
     def test_a_reused_pr_keeps_its_title_and_body(self):
         """Rewriting a description someone may have written by hand is not ours."""
@@ -440,8 +504,8 @@ class CliTest(unittest.TestCase):
         found = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \
              mock.patch.object(driver_pr, "commits_on_branch", return_value=["one"]), \
-             mock.patch.object(driver_pr, "list_pull_requests", return_value=[]), \
-             mock.patch.object(driver_pr, "find_pull_request", return_value=found), \
+             mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [found], [found]]), \
              mock.patch.object(driver_pr, "_run", return_value=gh_result("no url\n")), \
              mock.patch("sys.stdout") as out, \
              mock.patch("sys.stderr"):

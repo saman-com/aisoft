@@ -165,7 +165,17 @@ def start(
     A caller-supplied `pr` must match what the branch actually has. The cycle
     commits to the checked-out branch, so acting on a different PR would push a fix
     for one review onto another.
+
+    `base` must be a different branch. `--branch feature --base feature` gives an
+    empty `git log` and asks `gh` to open a PR from a branch into itself, which is
+    refused deeper down with a message that does not say why.
     """
+    if branch == base:
+        raise LoopError(
+            f"{branch!r} cannot be its own base. A pull request is a branch asking "
+            "to be merged into another one, so --base has to name a different "
+            "branch than --branch."
+        )
     commits = commits_on_branch(branch, base=base)
     pull_request, created = ensure_pull_request(
         branch=branch, base=base, commits=commits

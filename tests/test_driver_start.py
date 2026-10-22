@@ -189,6 +189,28 @@ class BranchTest(unittest.TestCase):
         self.assertEqual(ensure.call_args.kwargs["branch"], BRANCH)
         self.assertEqual(script.kwargs[0]["branch"], BRANCH)
 
+    def test_a_branch_that_is_also_the_base_is_refused_before_gh(self):
+        """`--base feature` with `--branch feature` is a PR into itself.
+
+        Git would report no commits and gh would refuse the create, both with a
+        message that does not say what the operator got wrong.
+        """
+        script = Script([Outcome.SUCCESS])
+        with mock.patch.object(driver_loop, "ensure_pull_request") as ensure, \
+             mock.patch.object(driver_loop, "commits_on_branch") as commits, \
+             mock.patch.object(driver_loop, "wait_for_contract_comment") as wait, \
+             mock.patch.object(driver_loop.driver_log, "log"):
+            with self.assertRaises(driver_loop.LoopError) as caught:
+                driver_loop.run_loop(
+                    repo="owner/repo", branch=BRANCH, base=BRANCH,
+                    create=True, cycle=script,
+                )
+        self.assertFalse(ensure.called)
+        self.assertFalse(commits.called)
+        self.assertFalse(wait.called)
+        self.assertEqual(script.asked, [])
+        self.assertIn(BRANCH, str(caught.exception))
+
     def test_a_number_for_a_different_pr_is_refused_before_any_attempt(self):
         """The loop commits to the checked-out branch, so it can only act on that PR."""
         script = Script([Outcome.SUCCESS])

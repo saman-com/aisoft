@@ -261,9 +261,10 @@ def create_pull_request(
     nothing new, and its message is passed through.
 
     It is still not a lock. Two drivers started in the same second can both find
-    no PR and both create one. Making that safe needs a remote-side claim (a
-    branch-specific label, or a second check after creation), which is a larger
-    change than "reuse the PR that is there".
+    no PR and both create one. Here the collision is left to `gh`, which rejects
+    a second PR for the same head and base; `ensure_pull_request` also looks once
+    more after creating, because it reuses whatever it finds and so has to notice
+    a duplicate it did not cause.
     """
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
@@ -317,8 +318,15 @@ def ensure_pull_request(
     title. `gh pr create` is reached only when the lookup found no open PR.
 
     One `gh pr list --state all` answers both questions at once: whether an open
-    PR exists, and whether the branch has only merged ones. Asking twice would
-    leave a moment between the two answers in which the workflow could post.
+    PR exists, and whether the branch has only merged ones. Asking twice before
+    creating would leave a moment between the two answers in which another run
+    could create the PR.
+
+    Creating is not atomic, so a create is followed by one more lookup: two runs
+    that both saw no open PR both reach `gh pr create`, and the second one makes a
+    duplicate. That cannot be prevented here, but it can be reported instead of
+    handed back as "your PR", which is what would let a loop fix one of two PRs
+    while the review comments went to the other.
     """
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
@@ -337,10 +345,21 @@ def ensure_pull_request(
     # branch whose last PR merged and then grew new commits is the normal second
     # round. gh refuses the create itself when nothing is new, and its message is
     # passed through, which is more accurate than a rule here guessing.
-    return (
-        _open(branch=branch, base=base, title=title, body=body, commits=commits),
-        True,
-    )
+    created = _open(branch=branch, base=base, title=title, body=body, commits=commits)
+
+    # Look once more, because the lookup above and the create were two separate
+    # moments: another run can have opened the same PR in between. Two open PRs
+    # split the review, so say so here rather than picking one and acting on it.
+    open_now = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
+    if len(open_now) > 1:
+        numbers = ", ".join(f"#{pr.number}" for pr in open_now)
+        raise GhFailed(
+            f"two open pull requests now point at {branch!r} ({numbers}): another "
+            "run created one between this call's lookup and its create. Close all "
+            "but one before running again, or the review and the loop will not "
+            "agree about which PR they are working on."
+        )
+    return created, True
 
 
 def _open(
@@ -389,9 +408,19 @@ def _open(
     url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
     number = _number_from_url(url)
     if number is None:
-        # Fall back to the lookup rather than inventing a number: the PR exists,
-        # and asking for it by head ref is the same call that guards duplicates.
-        return find_pull_request(branch)
+        # The number has to be looked up, but a lookup answers with the branch's
+        # open PRs, not with this call's. One open PR is therefore the one just
+        # created; two means one of them belongs to someone else and there is no
+        # way to tell which, so guessing would act on the wrong PR.
+        open_now = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
+        if len(open_now) == 1:
+            return open_now[0]
+        raise GhFailed(
+            f"gh created a pull request for {branch!r} but printed no number, and "
+            f"looking it up found {len(open_now)} open pull requests for that "
+            "branch, so there is no single PR this run can say it created. Check "
+            "the branch on GitHub before running again."
+        )
 
     return PullRequest(number=number, url=url, state="OPEN", head_ref=branch)
 

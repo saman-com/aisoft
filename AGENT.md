@@ -340,6 +340,16 @@ that, so the cost of one extra `gh pr list` is always worth paying.
   actionable part.
 - Opening from `master` or `main` is refused before `gh` runs. A PR is a branch
   asking to merge somewhere, and the base cannot be its own head.
+- A create is followed by one more lookup, because the lookup and the create are
+  two separate moments. With two open PRs for the branch the call raises
+  `GhFailed` rather than picking one: the review would be attached to whichever
+  PR it picked, and every later push would follow that guess. The same rule
+  applies when `gh pr create` succeeds but prints no readable URL, since the
+  number then comes from a lookup that cannot tell this run's PR from another
+  run's.
+- `driver_loop.start` refuses `--branch` equal to `--base` before either `git`
+  or `gh` runs. Git would report no commits and `gh` would reject a PR into
+  itself, both with a message that does not name the mistake.
 
 The title and body come from git, never from a summary of it: the newest commit
 subject (or the branch name when nothing is ahead of the base) and the list of
