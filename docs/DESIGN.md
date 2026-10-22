@@ -153,6 +153,10 @@ calling `gh pr create`:
   `create_pull_request` raises `PullRequestExists` carrying it, for a caller that
   needs to know its PR was new. `--create` uses the ensure form, so running it
   twice is safe and the second run says `reused`.
+- **It looks again after creating.** The lookup and the create are two separate
+  moments, so another run can open a PR in between. Both entry points check that
+  the branch has only the PR they created, and stop with the numbers to close
+  rather than hand back one of two.
 - **A closed or merged PR does not block a new one.** A branch whose PR merged
   and then grew new commits is the normal second round. gh refuses the create
   itself when the branch has nothing new, and that message is passed through.

@@ -274,10 +274,10 @@ def create_pull_request(
     nothing new, and its message is passed through.
 
     It is still not a lock. Two drivers started in the same second can both find
-    no PR and both create one. Here the collision is left to `gh`, which rejects
-    a second PR for the same head and base; `ensure_pull_request` also looks once
-    more after creating, because it reuses whatever it finds and so has to notice
-    a duplicate it did not cause.
+    no PR and both create one. `gh` rejects a second PR for the same head and
+    base, but that is not a guarantee for every base, so the create is followed by
+    the same duplicate check `ensure_pull_request` makes: a second open PR on the
+    branch is reported rather than returned as if it were the only one.
     """
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
@@ -306,7 +306,9 @@ def create_pull_request(
                 f"#{found.number} is already open for this branch: {found.url}", found
             )
 
-    return _open(branch=branch, base=base, title=title, body=body, commits=commits)
+    created = _open(branch=branch, base=base, title=title, body=body, commits=commits)
+    _refuse_a_second_open(created)
+    return created
 
 
 def ensure_pull_request(
@@ -383,17 +385,32 @@ def ensure_pull_request(
             f"gh said: {error}"
         ) from error
 
-    # Look once more, because the lookup above and the create were two separate
-    # moments: another run can have opened the same PR in between. Two open PRs
-    # split the review, so say so here rather than picking one and acting on it.
-    open_now = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
+    _refuse_a_second_open(created)
+    return created, True
+
+
+def _refuse_a_second_open(created: PullRequest) -> None:
+    """Check, after a create, that `created` is the branch's only open PR.
+
+    The lookup a create is preceded by and the create itself are two separate
+    moments, so another run can have opened the same PR in between. Two open PRs
+    split the review, so say so rather than picking one and acting on it.
+
+    This lives here, called from both entry points, because "refuse to make a
+    second open one" is a promise of `create_pull_request` as much as of
+    `ensure_pull_request`; leaving the check to the ensure path only would let a
+    direct caller return a PR while a duplicate sits beside it.
+    """
+    open_now = [
+        pr for pr in list_pull_requests(created.head_ref) if pr.state == "OPEN"
+    ]
     if len(open_now) > 1:
         numbers = ", ".join(f"#{pr.number}" for pr in open_now)
         raise GhFailed(
-            f"two open pull requests now point at {branch!r} ({numbers}): another "
-            "run created one between this call's lookup and its create. Close all "
-            "but one before running again, or the review and the loop will not "
-            "agree about which PR they are working on."
+            f"two open pull requests now point at {created.head_ref!r} ({numbers}): "
+            "another run created one between this call's lookup and its create. "
+            "Close all but one before running again, or the review and the loop "
+            "will not agree about which PR they are working on."
         )
     # One open PR is this call's only when it is the one gh reported creating. A
     # different number means the branch's open PR belongs to another run, and
@@ -401,12 +418,11 @@ def ensure_pull_request(
     # while the review read the other one.
     if open_now and open_now[0].number != created.number:
         raise GhFailed(
-            f"this call created #{created.number} for {branch!r}, but the branch's "
-            f"open pull request is #{open_now[0].number}. Another run opened one at "
-            "the same time, so there is no single PR this run can say it created. "
-            "Check the branch on GitHub before running again."
+            f"this call created #{created.number} for {created.head_ref!r}, but the "
+            f"branch's open pull request is #{open_now[0].number}. Another run "
+            "opened one at the same time, so there is no single PR this run can say "
+            "it created. Check the branch on GitHub before running again."
         )
-    return created, True
 
 
 def _open(
