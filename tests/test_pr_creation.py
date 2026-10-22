@@ -275,6 +275,48 @@ class CreateTest(unittest.TestCase):
                 create_pull_request(branch="b")
         self.assertIn("2 open pull requests", str(raised.exception))
 
+    def test_a_second_open_pr_after_the_create_is_reported_not_returned(self):
+        """`create_pull_request` promises no second PR, so it must check too.
+
+        gh rejects a duplicate for the same head and base, but that is gh's rule
+        and not a guarantee here: without this check a caller using the strict
+        path would be handed a PR while a duplicate sat beside it.
+        """
+        first = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+        second = PullRequest(
+            number=37, url="https://example.test/pull/37", state="OPEN", head_ref="b"
+        )
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [first, second]]), \
+             mock.patch.object(driver_pr, "_run",
+                               return_value=gh_result(NEW_PR_URL + "\n")):
+            with self.assertRaises(GhFailed) as raised:
+                create_pull_request(branch="b", commits=["one"])
+        self.assertIn("#36", str(raised.exception))
+        self.assertIn("#37", str(raised.exception))
+
+    def test_one_open_pr_that_is_not_the_created_one_is_a_duplicate_here_too(self):
+        """The single-PR case cannot tell "my PR" from "the other run's PR"."""
+        other = PullRequest(
+            number=37, url="https://example.test/pull/37", state="OPEN", head_ref="b"
+        )
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [other]]), \
+             mock.patch.object(driver_pr, "_run", return_value=gh_result(NEW_PR_URL + "\n")):
+            with self.assertRaises(GhFailed) as raised:
+                create_pull_request(branch="b", commits=["one"])
+        self.assertIn("#36", str(raised.exception))
+        self.assertIn("#37", str(raised.exception))
+
+    def test_the_pr_the_create_reported_is_returned(self):
+        """The normal case is unchanged: the created PR comes back."""
+        created = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [created]]), \
+             mock.patch.object(driver_pr, "_run", return_value=gh_result(NEW_PR_URL + "\n")):
+            pr = create_pull_request(branch="b", commits=["one"])
+        self.assertEqual(pr.number, 36)
+
     def test_the_base_branch_is_configurable(self):
         _, calls = self.create(
             runs={"pr list": gh_result("[]"), "pr create": gh_result(NEW_PR_URL)},
