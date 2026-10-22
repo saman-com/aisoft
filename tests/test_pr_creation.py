@@ -627,6 +627,22 @@ class DefaultBranchTest(unittest.TestCase):
                 self.assertFalse(run.called)
 
 
+    def test_a_branch_pointed_at_itself_is_refused(self):
+        """`--head` and `--base` on the same branch describe no merge at all.
+
+        Only the default branches were refused before, so a feature branch whose
+        base was itself reached `gh` and came back with "No commits between",
+        which arrives after the run has started and does not name the real cause.
+        """
+        for branch in ("slice-5-create-pr", "trunk"):
+            with self.subTest(branch=branch):
+                with mock.patch.object(driver_pr, "_run") as run:
+                    with self.assertRaises(GhFailed) as raised:
+                        create_pull_request(branch=branch, base=branch)
+                self.assertIn("same branch", str(raised.exception))
+                self.assertFalse(run.called)
+
+
 class CliTest(unittest.TestCase):
     def test_create_reports_the_new_pr_and_exits_zero(self):
         with mock.patch.object(driver_pr, "current_branch", return_value="b"), \

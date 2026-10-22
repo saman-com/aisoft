@@ -276,7 +276,8 @@ def create_pull_request(
     is the same lookup with the opposite answer.
 
     - `existing` lets a caller that already looked pass what it found, so the
-      lookup is not paid for twice. It short-circuits before any `gh` call.
+      lookup is not paid for twice. Only an OPEN PR short-circuits: a closed or
+      merged one says nothing about an open PR, so the lookup still runs.
     - When it is None the branch is looked up once before creating. One extra
       `gh pr list` turns "probably no PR" into "no PR as of now".
 
@@ -291,11 +292,21 @@ def create_pull_request(
     the same duplicate check `ensure_pull_request` makes: a second open PR on the
     branch is reported rather than returned as if it were the only one.
     """
+    # The branch must not be the base. A PR asks to merge one branch into a
+    # different one, so `--head` and `--base` naming the same branch describes no
+    # merge at all. Checking only the default branches leaves a feature branch
+    # pointed at itself to `gh`, whose "No commits between ..." arrives long after
+    # the run has started, when the reason is no longer obvious.
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
             f"refusing to open a pull request from the default branch {branch!r}. "
             "A PR is a branch asking to be merged somewhere, and the base cannot "
             "be its own head."
+        )
+    if base == branch:
+        raise GhFailed(
+            f"refusing to open a pull request from {branch!r} into {base!r}: they "
+            "are the same branch, so there is nothing to merge."
         )
 
     if existing is not None and existing.state == "OPEN":
