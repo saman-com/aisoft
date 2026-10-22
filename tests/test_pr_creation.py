@@ -343,6 +343,24 @@ class CreateTest(unittest.TestCase):
         body = create[create.index("--body") + 1]
         self.assertNotIn("No commits", body)
 
+    def test_a_closed_supplied_pr_does_not_skip_the_look_first_check(self):
+        """A closed argument says nothing about an open PR, so the lookup still runs.
+
+        Skipping the lookup for any supplied PR lets a stale argument walk past the
+        duplicate guard: a PR opened after the caller looked would go unseen and a
+        second one would be created on top of it.
+        """
+        closed = PullRequest(
+            number=12, url="https://example.test/pull/12", state="CLOSED", head_ref="b"
+        )
+        with self.assertRaises(PullRequestExists):
+            self.create(
+                runs={"pr list": gh_result(GH_JSON)},
+                branch="slice-5-create-pr",
+                commits=["feat: create the PR"],
+                existing=closed,
+            )
+
     def test_a_supplied_title_and_body_reach_gh(self):
         _, calls = self.create(
             runs={"pr list": gh_result("[]"), "pr create": gh_result(NEW_PR_URL)},

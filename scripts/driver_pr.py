@@ -308,7 +308,13 @@ def create_pull_request(
     # must not become "there was nothing there". `NoPullRequest` is the only
     # error that means "go ahead", and it is caught here rather than around the
     # whole function so a `GhFailed` keeps travelling.
-    if existing is None:
+    #
+    # `existing` only saves this lookup when it answers the question the lookup
+    # asks, which is "is there an OPEN PR right now?". A supplied PR that is
+    # closed or merged says nothing about that - one may have been opened since
+    # the caller looked - so the lookup runs anyway. Skipping it would let a
+    # stale argument bypass the guard and open a duplicate.
+    if existing is None or existing.state != "OPEN":
         try:
             found = find_pull_request(branch)
         except NoPullRequest:
