@@ -323,7 +323,10 @@ class CommitsOnBranchTest(unittest.TestCase):
             seen.append(list(args))
             return results[len(seen) - 1]
 
-        with mock.patch.object(driver_git, "_git", side_effect=fake_git):
+        # A failed range is reported on stderr, which these cases trigger on
+        # purpose; keep it out of the test output.
+        with mock.patch.object(driver_git, "_git", side_effect=fake_git), \
+             mock.patch("sys.stderr"):
             subjects = commits_on_branch(BRANCH)
         return subjects, seen
 
@@ -350,18 +353,37 @@ class CommitsOnBranchTest(unittest.TestCase):
         subjects, _ = self.run_log(result("one\n\n  \ntwo\n"))
         self.assertEqual(subjects, ["one", "two"])
 
-    def test_a_missing_base_ref_falls_back_to_the_branch_history(self):
-        """A clone that never fetched master can still describe the branch."""
-        subjects, seen = self.run_log(
-            result(returncode=128, stderr="unknown revision"), result("one\ntwo\n")
-        )
-        self.assertEqual(subjects, ["one", "two"])
-        self.assertEqual(seen[1][:2], ["log", "--reverse"])
-        self.assertIn(BRANCH, seen[1])
+    def test_a_missing_base_ref_is_not_replaced_by_the_branch_history(self):
+        """The fallback would list commits the base may already have.
+
+        The body claims these are the commits the base does not have, so guessing
+        with the branch's own history makes the description contradict the diff.
+        An empty list is the honest answer, and git is not asked a second
+        question whose answer would be about a different range.
+        """
+        subjects, seen = self.run_log(result(returncode=128, stderr="unknown revision"))
+        self.assertEqual(subjects, [])
+        self.assertEqual(len(seen), 1)
+
+    def test_a_missing_base_ref_says_so_instead_of_going_quiet(self):
+        """An empty list is also what a branch with no work ahead looks like.
+
+        Without a warning the two are indistinguishable, and the operator reads an
+        empty commit list as "there is nothing to describe" rather than "the base
+        was never fetched".
+        """
+        with mock.patch.object(driver_git, "_git",
+                               return_value=result(returncode=128, stderr="unknown revision")), \
+             mock.patch("sys.stderr") as err:
+            commits_on_branch(BRANCH)
+        said = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("unknown revision", said)
+        self.assertIn("git fetch", said)
+        self.assertIn("origin/master", said)
 
     def test_an_unreadable_history_returns_nothing_rather_than_raising(self):
         """Failing to list commits must not stop a PR from being opened."""
-        subjects, _ = self.run_log(result(returncode=128), result(returncode=128))
+        subjects, _ = self.run_log(result(returncode=128))
         self.assertEqual(subjects, [])
 
 

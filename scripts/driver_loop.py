@@ -73,6 +73,8 @@ from driver_comments import (
     WORKFLOW_AUTHOR,
     DriverError,
     ReviewTimeout,
+    contract_comment,
+    list_comments,
     wait_for_contract_comment,
 )
 from driver_cycle import CycleResult, NoReview, repository, run_cycle, summarize
@@ -143,24 +145,36 @@ def start(
     author: str = WORKFLOW_AUTHOR,
     quiet: bool = False,
 ) -> PullRequest:
-    """Get the branch a PR, and wait for its first review. Return the PR.
+    """Get the branch a PR, and wait for the review this run should act on.
 
-    This is the step Slice 4 did not have: a run that starts from a branch with
+    Returns the PR. This is the step Slice 4 did not have: a run that starts from a branch with
     commits and no pull request. Two things happen, in this order, and the order
     is the whole point:
 
     - **Ensure the PR.** `driver_pr.ensure_pull_request` is the only place a PR is
       opened, so a branch that already has one is reused by the same call and
       there is no second create path to keep in step with the first.
-    - **Wait for the first review.** `run_cycle` raises `NoReview` when the PR has
-      no contract comment, and a PR opened a second ago never does: the workflow
-      has not run yet. Waiting here is what lets the first cycle read a review
-      instead of failing on a fresh PR.
+    - **Wait for a review.** `run_cycle` raises `NoReview` when the PR has no
+      contract comment, and a PR opened a second ago never does: the workflow has
+      not run yet. Waiting here is what lets the first cycle read a review instead
+      of failing on a fresh PR.
 
-    The wait needs no baseline. A PR that was just created has no contract comment
-    at all, so the first one that appears is the review of the first push, whatever
-    its id. A reused PR already has one, and waiting for it returns at once rather
-    than spending the timeout.
+    The wait needs a baseline, and a created PR and a reused one need opposite
+    ones. A PR that was just created has no contract comment at all, so `None` is
+    right there: the first one that appears is the review of the first push,
+    whatever its id. A reused PR already has one, and that comment describes an
+    earlier iteration, so waiting with no baseline would return at once and the
+    first cycle would act on a stale verdict. For a reused PR the baseline is the
+    comment that is already there, which makes the wait mean "wait for the review
+    of the newest push".
+
+    The cost of that choice is worth stating: a reused PR whose review is already
+    current has no rewrite coming, so `--create` waits and times out (exit 2,
+    "nothing to do") instead of starting. That is the loud half of the trade. The
+    quiet half - reading a review written before the newest push and stopping on
+    its verdict - would declare a branch ready for merge on code it never covered.
+    A caller that wants to act on the review already on the PR runs without
+    `--create`, which reads it at once and needs no wait.
 
     A caller-supplied `pr` must match what the branch actually has. The cycle
     commits to the checked-out branch, so acting on a different PR would push a fix
@@ -196,20 +210,32 @@ def start(
             f"{verb} PR #{pull_request.number} for {branch!r} into {base!r} "
             f"({count} {noun}): {pull_request.url}"
         )
+        # A reused PR may already have a review, so what is being waited for is the
+        # one the newest push produces; saying "the first review" there would
+        # promise something that may already have arrived.
+        wanted = "the first review" if created else "a review of the newest push"
         driver_log.log(
-            f"waiting up to {timeout:.0f}s for the first review "
+            f"waiting up to {timeout:.0f}s for {wanted} "
             f"(polling every {interval:.0f}s)"
         )
 
+    baseline = None
+    if not created:
+        # Reused, so whatever the poster already wrote is the review of an earlier
+        # push and is what the wait has to beat. `contract_comment` returns the
+        # newest one, or `None` for a PR someone opened by hand and the workflow
+        # has not reached yet - then waiting from scratch is right.
+        baseline = contract_comment(list_comments(repo, pull_request.number), author)
     wait_for_contract_comment(
         repo,
         pull_request.number,
+        baseline=baseline,
         timeout=timeout,
         interval=interval,
         author=author,
     )
     if not quiet:
-        driver_log.log(f"the first review on #{pull_request.number} is in; starting the loop")
+        driver_log.log(f"the review on #{pull_request.number} is in; starting the loop")
     return pull_request
 
 
@@ -239,9 +265,9 @@ def run_loop(
     default would be bound when this module is imported, so replacing
     `driver_loop.run_cycle` to test the seam would silently have no effect.
 
-    `create=True` runs `start` first: ensure the PR, wait for the first review, and
-    then loop against that PR. It is refused with `dry_run`, which promises to
-    change nothing, and opening a PR is a change.
+    `create=True` runs `start` first: ensure the PR, wait for the review that is
+    not the one already read, and then loop against that PR. It is refused with
+    `dry_run`, which promises to change nothing, and opening a PR is a change.
     """
     perform = cycle if cycle is not None else run_cycle
     check_iteration(start_iteration)
@@ -363,7 +389,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--create",
         action="store_true",
-        help="ensure the branch has a PR (create only if none is open), wait for its first review, then loop",
+        help=(
+            "ensure the branch has a PR (create only if none is open), wait for a "
+            "review newer than the one it already has, then loop"
+        ),
     )
     parser.add_argument(
         "--base", default="master", help="the branch the PR is opened against"

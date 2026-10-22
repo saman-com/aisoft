@@ -4,7 +4,7 @@ T5.3 is the first time the whole product runs as one command. Everything it uses
 is already tested on its own:
 
     driver_pr.ensure_pull_request   the branch's PR, created only when none is open
-    driver_comments.wait_for_contract_comment   the first review, content-based
+    driver_comments.wait_for_contract_comment   the review, content-based
     driver_loop.run_loop            the attempts, up to five
     driver_status.report            the one line a run ends on
 
@@ -12,12 +12,15 @@ What T5.3 adds is the *order*, and that is what these tests pin:
 
 - The PR is ensured **before** the first cycle, and the first cycle is given the
   number that came back.
-- The first review is waited for **before** the first cycle, so the cycle reads a
-  review instead of raising `NoReview` on a PR the workflow has not seen yet.
+- A review is waited for **before** the first cycle, so the cycle reads a review
+  instead of raising `NoReview` on a PR the workflow has not seen yet.
+- The wait starts from the right baseline: nothing for a PR this run created,
+  the existing comment for a reused one. A reused PR's comment is a review of an
+  earlier iteration, and returning on it would hand the loop a stale verdict.
 - Reuse is not a second create path. A branch with an open PR goes through the
   same `ensure_pull_request` call, which is the only place `gh pr create` lives.
-- A run that could not create the PR, or never got a first review, stops with the
-  exit code the rest of the driver already uses instead of starting a loop.
+- A run that could not create the PR, or never got a review, stops with the exit
+  code the rest of the driver already uses instead of starting a loop.
 
 The cycle is injected so a test can script outcomes; `ensure`, the wait and the
 log are patched because they talk to gh.
@@ -85,6 +88,7 @@ class StartTest(unittest.TestCase):
         outcomes: list[Outcome] | None = None,
         ensure_error: Exception | None = None,
         wait_error: Exception | None = None,
+        existing: Comment | None = None,
         **kwargs,
     ):
         script = Script(outcomes or [Outcome.SUCCESS])
@@ -99,9 +103,17 @@ class StartTest(unittest.TestCase):
             return_value=COMMENT,
         )
         commits = mock.MagicMock(return_value=list(COMMITS))
+        # The comment the PR already has, if any. A reused PR is looked at before
+        # waiting so the wait can start from it.
+        listing = mock.MagicMock(return_value=[] if existing is None else [existing])
+        current = mock.MagicMock(return_value=existing)
+        self.listing = listing
+        self.current = current
         with mock.patch.object(driver_loop, "ensure_pull_request", ensure), \
              mock.patch.object(driver_loop, "commits_on_branch", commits), \
              mock.patch.object(driver_loop, "wait_for_contract_comment", wait), \
+             mock.patch.object(driver_loop, "list_comments", listing), \
+             mock.patch.object(driver_loop, "contract_comment", current), \
              mock.patch.object(driver_loop, "current_branch", return_value=BRANCH), \
              mock.patch.object(driver_loop.driver_log, "log") as logged:
             loop = driver_loop.run_loop(
@@ -143,6 +155,37 @@ class StartTest(unittest.TestCase):
         kwargs = wait.call_args.kwargs
         self.assertEqual(kwargs["timeout"], driver_loop.DEFAULT_TIMEOUT)
         self.assertEqual(kwargs["interval"], driver_loop.DEFAULT_INTERVAL)
+
+    def test_a_new_pr_is_waited_for_without_a_baseline(self):
+        """A PR opened a second ago has no comment, so the first one is the review."""
+        _loop, _ensure, wait, _commits, _script, _logged = self.run_start(created=True)
+        self.assertIsNone(wait.call_args.kwargs["baseline"])
+        self.assertFalse(self.listing.called)
+
+    def test_a_reused_pr_waits_from_the_review_it_already_has(self):
+        """The comment on a reused PR describes an earlier iteration.
+
+        Waiting with no baseline returns on that stale comment at once, and the
+        first cycle then acts on a verdict from a previous round instead of the
+        review of the newest push.
+        """
+        stale = Comment(id=700, body="## Confidence Score\n3/5\n", author="github-actions[bot]")
+        _loop, _ensure, wait, _commits, _script, _logged = self.run_start(
+            created=False, existing=stale
+        )
+        self.assertIs(wait.call_args.kwargs["baseline"], stale)
+        self.listing.assert_called_once_with("owner/repo", NEW_PR.number)
+
+    def test_a_reused_pr_with_no_review_yet_still_waits_from_scratch(self):
+        """Reused is not the same as "already reviewed".
+
+        A PR someone opened by hand has no contract comment, so there is nothing
+        to be stale against and the first one to appear is the review to act on.
+        """
+        _loop, _ensure, wait, _commits, _script, _logged = self.run_start(
+            created=False, existing=None
+        )
+        self.assertIsNone(wait.call_args.kwargs["baseline"])
 
     def test_an_existing_pr_is_reused_and_not_created_again(self):
         """One call, one answer: `ensure` is the only creation path there is.

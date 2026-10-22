@@ -25,6 +25,7 @@ rather than passed in, so the iteration number is always in the history.
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 
 REMOTE = "origin"
@@ -183,22 +184,34 @@ def commits_on_branch(
     it.
 
     The range is `<remote>/<base>..<branch>`, not `<remote>/<branch>..<branch>`:
-    the second is always empty, because a branch contains itself. When the base
-    cannot be read (a clone that never fetched it, or a base branch with a name
-    nobody told us) this falls back to the last commits on the branch, which is
-    usually right and never empty for a branch with work on it.
+    the second is always empty, because a branch contains itself.
+
+    When the base cannot be read (a clone that never fetched it, or a base branch
+    with a name nobody told us) this returns an empty list and says so on stderr.
+    Falling back to the last commits on the branch would list work the base may
+    already have, which is the one thing the list must never do: the body says
+    these are the commits the base does not have. An empty list is the honest
+    answer, and the warning is what keeps it from being a silent one - the caller
+    can fetch the base and try again instead of shipping a description that
+    contradicts the diff.
+
+    Returning an empty list is not an error: a branch with nothing ahead of its
+    base gets the same answer, and failing to list commits must not stop a PR from
+    being opened.
     """
     completed = _git(
         ["log", "--reverse", "--format=%s", f"{remote}/{base}..{branch}"], cwd=cwd
     )
     if completed.returncode != 0:
-        # Say what actually went wrong: a caller that sees an empty list because
-        # the base ref is missing should not have to guess that it was missing.
-        completed = _git(
-            ["log", "--reverse", "--max-count=50", "--format=%s", branch], cwd=cwd
+        detail = (completed.stderr or completed.stdout).strip()
+        print(
+            f"warning: cannot list the commits {branch!r} has that "
+            f"{remote}/{base} does not ({detail or completed.returncode}); "
+            "the commit list is left empty rather than guessed. "
+            f"Run `git fetch {remote}` and try again.",
+            file=sys.stderr,
         )
-        if completed.returncode != 0:
-            return []
+        return []
     return [line for line in completed.stdout.splitlines() if line.strip()]
 
 
@@ -266,7 +279,6 @@ def main(argv: list[str] | None = None) -> int:
     Exit codes: 0 pushed, 1 failed, 2 nothing to push.
     """
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(description="Stage, commit and push Pi's changes.")
     parser.add_argument("--iteration", type=int, required=True)

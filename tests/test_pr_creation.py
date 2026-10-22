@@ -402,6 +402,60 @@ class EnsureTest(unittest.TestCase):
         self.assertIn("#36", str(raised.exception))
         self.assertIn("#37", str(raised.exception))
 
+    def test_a_failed_create_with_an_open_pr_is_reported_as_a_duplicate(self):
+        """The other run's create won, so gh refused this one.
+
+        gh's message on its own ("a pull request already exists") reads as a
+        create problem. The branch does have a PR, just not this run's, and the
+        loop has to be told so it does not retry into a second one.
+        """
+        first = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [first]]), \
+             mock.patch.object(driver_pr, "_run",
+                               return_value=gh_result("", 1, "a pull request already exists")):
+            with self.assertRaises(GhFailed) as raised:
+                ensure_pull_request(branch="b", commits=["one"])
+        self.assertIn("#36", str(raised.exception))
+        self.assertIn("a pull request already exists", str(raised.exception))
+
+    def test_a_failed_create_with_no_open_pr_keeps_ghs_message(self):
+        """No PR appeared, so the create really did fail and gh is the authority."""
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], []]), \
+             mock.patch.object(driver_pr, "_run",
+                               return_value=gh_result("", 1, "no commits between")):
+            with self.assertRaises(GhFailed) as raised:
+                ensure_pull_request(branch="b", commits=[])
+        self.assertEqual(str(raised.exception), "gh pr create failed for 'b' into 'master': no commits between")
+
+    def test_one_open_pr_that_is_not_the_created_one_is_a_duplicate(self):
+        """The single-PR case cannot tell "my PR" from "the other run's PR".
+
+        Returning the created PR here would leave the loop pushing fixes to one
+        PR while the review reads the other.
+        """
+        other = PullRequest(
+            number=37, url="https://example.test/pull/37", state="OPEN", head_ref="b"
+        )
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [other]]), \
+             mock.patch.object(driver_pr, "_run", return_value=gh_result(NEW_PR_URL + "\n")):
+            with self.assertRaises(GhFailed) as raised:
+                ensure_pull_request(branch="b", commits=["one"])
+        self.assertIn("#36", str(raised.exception))
+        self.assertIn("#37", str(raised.exception))
+
+    def test_the_pr_the_create_reported_is_returned(self):
+        """The normal single-PR case still returns what was created."""
+        created = PullRequest(number=36, url=NEW_PR_URL, state="OPEN", head_ref="b")
+        with mock.patch.object(driver_pr, "list_pull_requests",
+                               side_effect=[[], [created]]), \
+             mock.patch.object(driver_pr, "_run", return_value=gh_result(NEW_PR_URL + "\n")):
+            pr, made = ensure_pull_request(branch="b", commits=["one"])
+        self.assertEqual(pr.number, 36)
+        self.assertTrue(made)
+
     def test_a_reused_pr_keeps_its_title_and_body(self):
         """Rewriting a description someone may have written by hand is not ours."""
         pr, _created, calls = self.ensure(
