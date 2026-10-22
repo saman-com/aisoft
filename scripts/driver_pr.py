@@ -203,10 +203,13 @@ def _clip(text: str, limit: int) -> str:
     """
     if len(text) <= limit:
         return text
-    cut = text[:limit]
-    if " " not in cut:
-        return cut
-    return cut[: cut.rindex(" ")].rstrip() + "..."
+    # The ellipsis has to fit inside the limit, so it is budgeted for before the
+    # cut. Without that, a single long word would come back at exactly `limit`
+    # characters with nothing to say it had been shortened.
+    cut = text[: limit - len("...")]
+    if " " in cut:
+        cut = cut[: cut.rindex(" ")]
+    return cut.rstrip() + "..."
 
 
 def build_body(
@@ -452,13 +455,19 @@ def _open(
     # well be one another run opened a moment earlier. Returning that PR would
     # hand the caller something it did not create, and every later push would
     # follow the guess while the review read the other PR. An unknown number is
-    # therefore reported, not filled in from the branch.
-    url = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
-    number = _number_from_url(url)
+    # therefore reported, not filled in from the branch. The URL is read from
+    # whichever line is one: gh prints it first, but may print warnings after it.
+    url, number = "", None
+    for line in result.stdout.splitlines():
+        number = _number_from_url(line.strip())
+        if number is not None:
+            url = line.strip()
+            break
     if number is None:
+        output = result.stdout.strip()
         raise GhFailed(
             f"gh created a pull request for {branch!r} but printed no readable PR "
-            f"number (output: {url or '(empty)'!r}), so this run cannot tell which "
+            f"number (output: {output or '(empty)'!r}), so this run cannot tell which "
             "pull request it opened. Check the branch on GitHub, then run again to "
             "reuse it."
         )

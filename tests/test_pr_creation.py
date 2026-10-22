@@ -89,6 +89,11 @@ class TitleTest(unittest.TestCase):
         title = build_title(["x" * 500], "b")
         self.assertLessEqual(len(title), TITLE_LIMIT)
 
+    def test_a_cut_title_ends_in_an_ellipsis_even_without_a_space(self):
+        """A title at the limit with no `...` reads as complete, not as cut."""
+        title = build_title(["x" * 500], "b")
+        self.assertTrue(title.endswith("..."))
+
 
 class BodyTest(unittest.TestCase):
     def test_the_commit_list_is_generated_from_git(self):
@@ -160,6 +165,19 @@ class CreateTest(unittest.TestCase):
         self.assertIn("slice-5-create-pr", create)
         self.assertIn("--title", create)
         self.assertIn("--body", create)
+
+    def test_the_url_is_read_even_when_gh_prints_more_after_it(self):
+        """The URL is gh's first line; a warning after it must not hide it."""
+        created, _calls = self.create(
+            runs={
+                "pr list": gh_result("[]"),
+                "pr create": gh_result(NEW_PR_URL + "\nsome trailing warning\n"),
+            },
+            branch="slice-5-create-pr",
+            commits=["feat: create the PR"],
+        )
+        self.assertEqual(created.number, 36)
+        self.assertEqual(created.url, NEW_PR_URL)
 
     def test_an_existing_pr_is_refused_not_duplicated(self):
         """The whole point: a second PR splits the review and cannot be undone."""
