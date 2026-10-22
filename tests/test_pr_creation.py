@@ -239,41 +239,36 @@ class CreateTest(unittest.TestCase):
                 create_pull_request(branch="b")
         self.assertFalse(any("create" in str(c.args) for c in run.mock_calls))
 
-    def test_a_created_pr_whose_url_is_unreadable_falls_back_to_the_lookup(self):
-        """The PR exists either way, so a lookup beats inventing a number."""
-        with mock.patch.object(
-            driver_pr, "_run", side_effect=[
-                gh_result("[]"),
-                gh_result("something unexpected\n", stderr=""),
-                gh_result(GH_JSON),
-            ]
-        ):
-            created = create_pull_request(branch="slice-5-create-pr")
-        self.assertEqual(created.number, 27)
+    def test_a_created_pr_whose_url_is_unreadable_is_reported_not_guessed(self):
+        """A lookup answers with the branch's PRs, not with this call's.
 
-    def test_an_unreadable_url_with_two_open_prs_is_refused(self):
-        """The lookup answers with the branch's PRs, not with this call's.
-
-        With one open PR there is only one thing it can be. With two, picking one
-        would hand the caller a PR this run may not have created, and every later
-        read and push would follow that guess.
+        The PR does exist, but only one of the open PRs on the branch is the one
+        this call created, and nothing in the listing says which. Returning the
+        single open PR would hand the caller something it may not have opened,
+        and every later read and push would follow that guess. Saying "created,
+        number unknown" is the only honest answer.
         """
-        two = (
-            '[{"number": 36, "url": "https://example.test/pull/36",'
-            ' "state": "OPEN", "headRefName": "b"},'
-            ' {"number": 37, "url": "https://example.test/pull/37",'
-            ' "state": "OPEN", "headRefName": "b"}]'
-        )
         with mock.patch.object(
             driver_pr, "_run", side_effect=[
                 gh_result("[]"),
                 gh_result("something unexpected\n", stderr=""),
-                gh_result(two),
             ]
         ):
             with self.assertRaises(GhFailed) as raised:
+                create_pull_request(branch="slice-5-create-pr")
+        self.assertIn("no readable PR number", str(raised.exception))
+
+    def test_an_unreadable_url_is_never_a_second_lookup(self):
+        """Only two `gh` calls happen: the look first, then the create.
+
+        A third call would be the lookup that guesses, so counting the calls is
+        what keeps the guess from coming back.
+        """
+        calls = [gh_result("[]"), gh_result("something unexpected\n", stderr="")]
+        with mock.patch.object(driver_pr, "_run", side_effect=calls) as run:
+            with self.assertRaises(GhFailed):
                 create_pull_request(branch="b")
-        self.assertIn("2 open pull requests", str(raised.exception))
+        self.assertEqual(run.call_count, 2)
 
     def test_a_second_open_pr_after_the_create_is_reported_not_returned(self):
         """`create_pull_request` promises no second PR, so it must check too.
