@@ -15,8 +15,8 @@
 - [x] **Slice 1** – PR-Agent Review Only
 - [x] **Slice 2** – Local Parser (Read-Only)
 - [x] **Slice 3** – Single Fix Cycle
-- [ ] **Slice 4** – Full Loop (max 5 iterations)
-- [ ] **Slice 5** – Pi Creates the PR
+- [x] **Slice 4** – Full Loop (max 5 iterations)
+- [x] **Slice 5** – Pi Creates the PR
 
 ---
 
@@ -239,9 +239,17 @@
   the next call open #39 because none was open, and `GH_TOKEN=invalid` exited 1
   with gh's 401 and created nothing.
 
-- [ ] **T5.3** Full start-to-finish integration test
-
-- [ ] **T5.3** Full start-to-finish integration test
+- [x] **T5.3** Full start-to-finish integration test
+  `driver_loop.start` runs before the first cycle under `--create`: ensure the
+  branch's PR, wait for the review this run should act on, then loop against it.
+  Live run on `slice-5-live-g` (4 commits, no PR): `created PR #40`, first review
+  4/5, then `iteration 1/5: 4/5 -> 4/5` … `iteration 5/5: 4/5 -> 4/5`, stopping on
+  `STOPPED AFTER 5 ITERATIONS - HUMAN REVIEW NEEDED` (exit 0). A second run on the
+  same branch printed `reused PR #40` and started at once because the newest
+  review already covered the newest push; `gh pr list --head slice-5-live-g`
+  stayed at one PR throughout. Five PR-Agent rounds found real defects in this
+  slice's own create path (duplicate-PR race, stale baseline on a reused PR,
+  silent commit-list fallback), all fixed on the branch. 541 tests pass.
 
 **Slice 5 complete when:** From a clean feature branch the system can create the PR and run the full review/fix loop.
 
