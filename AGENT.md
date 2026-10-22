@@ -321,6 +321,32 @@ someone about the wrong thing. `EXIT_CODES` in `driver_status.py` is where that
 mapping lives, and a test scans every `Outcome` against it so a new one cannot be
 added without a code.
 
+### The PR is looked for before it is created
+
+`scripts/driver_pr.py::create_pull_request` opens a PR with `gh pr create`, and
+the order inside it is the invariant: **look, then create.** Two PRs on one
+branch means two workflow runs post two contract comments, and two driver loops
+fix the same code while reading different reviews. There is no cheap undo for
+that, so the cost of one extra `gh pr list` is always worth paying.
+
+- A PR that is already open raises `PullRequestExists` carrying it. Until T5.2
+  lands, callers refuse and report the URL rather than creating a second one.
+- `gh pr list` failing is `GhFailed`, never "no PR". "I could not check" must
+  not become "there was nothing there", because the next step would be creating
+  a duplicate.
+- A `gh pr create` failure is raised with gh's own stderr. Its reasons (branch
+  not pushed, no commits between the branches, no permission) are each fixed
+  differently, so replacing the message with a status code destroys the only
+  actionable part.
+- Opening from `master` or `main` is refused before `gh` runs. A PR is a branch
+  asking to merge somewhere, and the base cannot be its own head.
+
+The title and body come from git, never from a summary of it: the newest commit
+subject (or the branch name when nothing is ahead of the base) and the list of
+commits the base does not have. `<remote>/<base>..<branch>` is the range; the
+obvious-looking `<remote>/<branch>..<branch>` is always empty because a branch
+contains itself.
+
 ### The contract comment is rendered by code, not by the model
 
 PR-Agent always reshapes model output into a GFM table

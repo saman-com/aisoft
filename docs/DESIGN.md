@@ -139,10 +139,26 @@ Contains:
 2. Pi finishes the implementation.
 3. Driver script runs:
    ```bash
-   gh pr create --title "..." --body "..."
+   python3 scripts/driver_pr.py --create
    ```
    or detects an existing open PR.
 4. Push triggers the GitHub Action → PR-Agent starts reviewing.
+
+Creation is `driver_pr.create_pull_request`, and it does two things beyond
+calling `gh pr create`:
+
+- **It looks first.** The branch is checked for an open PR before creating one,
+  because two PRs on one branch means two review runs and two loops fixing the
+  same code, with no cheap undo. When one exists it raises `PullRequestExists`
+  carrying the PR it found; reusing that PR instead of refusing is T5.2.
+- **It writes the title and body from git.** The title is the newest commit
+  subject, or the branch name when the branch has no commits ahead of the base.
+  The body names the branches and lists the commits the base does not have. Both
+  are derived, so neither can contradict the diff.
+
+A `gh pr create` failure is raised with gh's own message rather than mapped to a
+status code, because the reasons (branch not pushed, no commits between the
+branches, no permission) are each fixed differently.
 
 ### Phase B – Review Loop (max 5 iterations)
 

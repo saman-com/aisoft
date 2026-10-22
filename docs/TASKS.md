@@ -210,7 +210,17 @@
 ## Slice 5 – Pi Creates the PR
 **Exit criteria:** Pi (or the driver) can also create the initial PR so the whole flow can start from “Pi finished coding”.
 
-- [ ] **T5.1** PR creation logic (`gh pr create`)
+- [x] **T5.1** PR creation logic (`gh pr create`)
+
+  `driver_pr.create_pull_request` opens a PR when the branch has none: `gh pr
+  create` with `--base`, `--head`, a title and a body. The title is the newest
+  commit subject (branch name when nothing is ahead of the base), the body names
+  both branches and lists the commits the base does not have. A create failure is
+  raised with gh's own message. An existing open PR is refused rather than
+  duplicated: reuse is T5.2. Live: PR #36 opened from `slice-5-live-a` with title
+  `feat: add a clamp helper`, a second `--create` reported `already open: #36` and
+  left one PR, `--create` on `master` exited 1, and a branch with no commits ahead
+  of master surfaced `GraphQL: No commits between master and ...` (exit 1).
 
 - [ ] **T5.2** Idempotent handling (reuse existing PR if present)
 

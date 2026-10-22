@@ -167,6 +167,41 @@ def commit_and_push(
     return PushResult(branch=branch, commit=head, made_commit=made_commit)
 
 
+def commits_on_branch(
+    branch: str,
+    *,
+    base: str = "master",
+    remote: str = REMOTE,
+    cwd: str | None = None,
+) -> list[str]:
+    """The subjects of the commits `branch` has that the base branch does not.
+
+    This is what a pull request description is made of: the work on the branch,
+    oldest first, which is the order a reader expects when following a branch
+    from where it left the base. A body that lists commits is a summary a
+    reviewer can check against the diff, and nothing has to be invented to write
+    it.
+
+    The range is `<remote>/<base>..<branch>`, not `<remote>/<branch>..<branch>`:
+    the second is always empty, because a branch contains itself. When the base
+    cannot be read (a clone that never fetched it, or a base branch with a name
+    nobody told us) this falls back to the last commits on the branch, which is
+    usually right and never empty for a branch with work on it.
+    """
+    completed = _git(
+        ["log", "--reverse", "--format=%s", f"{remote}/{base}..{branch}"], cwd=cwd
+    )
+    if completed.returncode != 0:
+        # Say what actually went wrong: a caller that sees an empty list because
+        # the base ref is missing should not have to guess that it was missing.
+        completed = _git(
+            ["log", "--reverse", "--max-count=50", "--format=%s", branch], cwd=cwd
+        )
+        if completed.returncode != 0:
+            return []
+    return [line for line in completed.stdout.splitlines() if line.strip()]
+
+
 def _landed_commit(branch: str, head: str, *, cwd: str | None = None) -> str:
     """The commit the remote has for `branch`, verified after a push.
 
