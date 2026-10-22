@@ -59,10 +59,13 @@ from driver_comments import (
     list_comments,
     wait_for_contract_comment,
 )
+from driver_decision import Decision, Outcome, decide
 from driver_git import GitError, NothingToPush, PushResult, commit_and_push
+from driver_iteration import check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError, PiRun, run_pi
 from driver_pr import GhFailed, NoPullRequest, PullRequest, resolve
+from driver_status import report
 from parse_contract_comment import ParseError, Review, parse_comment
 
 
@@ -84,6 +87,10 @@ class CycleResult:
     after_comment: Comment | None = None
     push: PushResult | None = None
     run: PiRun | None = field(default=None, repr=False)
+    # What the loop should do next, decided from the newest review it has. A dry
+    # run or an early stop leaves this decided from `before`, so the caller never
+    # has to re-derive the rule from the score.
+    decision: Decision | None = None
 
 
 def read_before(repo: str, pull_request: PullRequest, author: str) -> tuple[Review, Comment]:
@@ -111,7 +118,13 @@ def run_cycle(
     pi_timeout: float = PI_DEFAULT_TIMEOUT,
     quiet: bool = False,
 ) -> CycleResult:
-    """Run one iteration of the fix loop. Raises rather than returning half a cycle."""
+    """Run one iteration of the fix loop. Raises rather than returning half a cycle.
+
+    The iteration is checked against the hard limit before anything else, so a
+    sixth attempt is refused before Pi runs, before a commit exists and before a
+    push lands. Everything below this line is one permitted attempt.
+    """
+    check_iteration(iteration)
     pull_request = resolve(branch)
     if pr is not None and pull_request.number != pr:
         raise NoPullRequest(
@@ -132,31 +145,46 @@ def run_cycle(
             )
         )
 
+    # `iteration` here is the attempt about to run, and `decide` counts attempts
+    # already made. On attempt 5 that is four, so a fifth fix is still allowed;
+    # the five-attempt stop happens on the way out, once attempt 5 has a review.
+    # That also makes HUMAN unreachable here: `check_iteration` caps `iteration`
+    # at 5, so the count handed over is at most 4. Both stops are still handled
+    # by one branch rather than asserting the limit away, so loosening the guard
+    # cannot turn a give-up into another push.
+    decision = decide(before, iteration=iteration - 1, pr=pull_request.number)
+
     if dry_run:
         if not quiet:
             driver_log.log("dry run: reviewed and parsed, nothing changed.")
+            driver_log.log(f"would be: {decision.message}")
         return CycleResult(
             pr=pull_request, before=before, after=None,
             pi_ok=False, pushed=False, pi_ran=False,
-            before_comment=before_comment,
+            before_comment=before_comment, decision=decision,
         )
 
-    if before.is_clean:
+    if decision.outcome is not Outcome.CONTINUE:
+        # Nothing to fix, or nothing left to try. Either way Pi must not run: its
+        # prompt comes from a review the loop has already decided about.
         if not quiet:
-            driver_log.log("already 5/5 with no issues; nothing to fix.")
+            driver_log.log(decision.message)
         return CycleResult(
             pr=pull_request, before=before, after=before,
             pi_ok=True, pushed=False, pi_ran=False,
             before_comment=before_comment, after_comment=before_comment,
+            decision=decision,
         )
 
     if not quiet:
-        driver_log.log(f"running pi (iteration {iteration}) from the Agent Prompt")
+        driver_log.log(
+            f"running pi ({describe_iteration(iteration)}) from the Agent Prompt"
+        )
     run = run_pi(before.agent_prompt, timeout=pi_timeout)
 
     if run.returncode != 0:
         raise PiError(
-            f"pi exited {run.returncode} on iteration {iteration}. "
+            f"pi exited {run.returncode} on {describe_iteration(iteration)}. "
             f"stderr: {run.stderr.strip() or '(empty)'}"
         )
     if not quiet and run.stdout.strip():
@@ -190,6 +218,10 @@ def run_cycle(
         after_comment.body, comment_id=after_comment.id, pr=pull_request.number
     )
     if not quiet:
+        # Labelled `iteration + 1` because that is what this review is the input
+        # for: the *next* attempt. `decide` below is given `iteration`, because
+        # it counts attempts already made. Both numbers are right for their own
+        # question, and the log line would read as off-by-one otherwise.
         driver_log.log(
             driver_log.describe_review(
                 after,
@@ -199,11 +231,20 @@ def run_cycle(
             )
         )
 
+    # Attempt N just finished, so this review is the one N attempts produced.
+    # `previous=before` is what makes a no-op fix visible: the same blocking
+    # findings coming back means Pi's changes did not touch them.
+    decision = decide(
+        after, iteration=iteration, pr=pull_request.number, previous=before
+    )
+    if not quiet:
+        driver_log.log(decision.message)
+
     return CycleResult(
         pr=pull_request, before=before, after=after,
         pi_ok=True, pushed=True, pi_ran=True,
         before_comment=before_comment, after_comment=after_comment,
-        push=push, run=run,
+        push=push, run=run, decision=decision,
     )
 
 
@@ -251,7 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", type=int, default=None, help="must match the PR for this branch")
     parser.add_argument("--branch", default=None, help="defaults to the current branch")
     parser.add_argument("--repo", default=None, help="owner/name; defaults to the current repository")
-    parser.add_argument("--iteration", type=int, default=1)
+    parser.add_argument(
+        "--iteration",
+        type=int,
+        default=1,
+        help="this attempt's number, 1..5; a value outside that range is refused",
+    )
     parser.add_argument("--dry-run", action="store_true", help="read and parse, change nothing")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
@@ -279,7 +325,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    # The delta first, then the verdict: what changed this cycle is context for
+    # the status, and the status is the line the operator acts on, so it goes
+    # last where it is not scrolled past.
     driver_log.log(summarize(result))
+    if result.decision is not None:
+        driver_log.log(report(result.decision, pr=result.pr).render())
     return 0
 
 

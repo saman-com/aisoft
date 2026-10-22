@@ -40,6 +40,19 @@ class BuildCommandTest(unittest.TestCase):
         """Print mode cannot show the trust prompt, so the decision is made up front."""
         self.assertIn("--approve", build_command())
 
+    def test_the_edit_tools_are_still_available(self):
+        """The allowlist must still permit the work the run exists to do.
+
+        A safety flag that also blocks `edit` and `write` would turn every attempt
+        into "nothing to push" instead of a fix, so the editing tools are pinned
+        alongside their absence being impossible.
+        """
+        command = build_command()
+        allowlist = command[command.index("--tools") + 1].split(",")
+        for tool in ("read", "edit", "write"):
+            self.assertIn(tool, allowlist)
+        self.assertNotIn("bash", allowlist)
+
     def test_the_prompt_is_not_on_the_command_line(self):
         """A prompt in argv is visible to every process and limited to ARG_MAX."""
         command = build_command()
@@ -49,6 +62,27 @@ class BuildCommandTest(unittest.TestCase):
     def test_extra_arguments_are_appended(self):
         command = build_command(extra_args=("--model", "openrouter/x"))
         self.assertEqual(command[-2:], ["--model", "openrouter/x"])
+
+    def test_pi_is_not_given_the_bash_tool(self):
+        """Pi must edit and stop there; the driver owns the commit and the push.
+
+        `bash` let Pi run `git commit` and `git push` itself (seen live on PR #31,
+        commit a573f9d, and again on PR #32, commit 73709ba), which bypasses every
+        push invariant the driver holds: the explicit non-forced refspec, the
+        branch check, and reading back the commit that landed. Once Pi has pushed,
+        `commit_and_push` finds a clean tree whose HEAD is already on the remote
+        and correctly reports that there was nothing to push, so a successful
+        attempt looks like a stall.
+
+        An allowlist is the only form that holds. Excluding the name is not enough:
+        with `--exclude-tools bash`, Pi reached a shell through its `subagent`
+        tool and the child process ran the command. So this pins the allowlist,
+        not the absence of one flag.
+        """
+        command = build_command()
+        self.assertIn("--tools", command)
+        self.assertNotIn("--exclude-tools", command)
+        self.assertNotIn("bash", command)
 
 
 class RunPiTest(unittest.TestCase):

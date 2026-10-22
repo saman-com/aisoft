@@ -2,9 +2,10 @@
 
 The documented invocation (T3.1) is:
 
-    pi --print --no-session --approve [extra args] < prompt.md
+    pi --print --no-session --approve --tools read,edit,write,grep,find,ls \
+        [extra args] < prompt.md
 
-Three choices matter for an unattended loop:
+Four choices matter for an unattended loop:
 
 - **`--print`** makes Pi process the prompt and exit. Without it, piped stdin also
   selects print mode, but relying on that means a change in TTY detection silently
@@ -15,6 +16,12 @@ Three choices matter for an unattended loop:
 - **`--approve`** settles project trust up front. Print mode cannot show the trust
   prompt, so an unapproved run silently skips project resources instead of failing
   visibly.
+
+  The fourth is the tool allowlist, and it costs something real: Pi can no longer
+run the test suite itself to check its own work. That is the trade accepted
+here, because the alternative is an unattended run that can force-push or push
+to a default branch. Verifying the suite belongs to the checks the repo already
+runs, not to the model that wrote the change.
 
 The prompt is written to stdin, never passed as an argument. A prompt is model
 output: it contains backticks, quotes, `$`, and pipes, all of which a shell would
@@ -38,7 +45,30 @@ DEFAULT_TIMEOUT = 1800.0
 
 # `--print` for one-shot execution, `--no-session` so iterations do not share
 # state, `--approve` because print mode cannot answer the trust prompt.
-BASE_ARGS = ("pi", "--print", "--no-session", "--approve")
+#
+# The tool allowlist is a safety property, not a preference. Pi's `bash` tool can
+# run `git commit` and `git push`, and it did exactly that on the live runs for
+# PR #31 (commit a573f9d) and PR #32 (commit 73709ba): the branch moved and the
+# review was written, while the driver's own push then found nothing left to do
+# and reported a successful attempt as a stall. Every invariant the driver holds
+# around pushing - the explicit non-forced refspec, the check that the branch did
+# not change under it, the read-back of the commit that landed - is bypassed by a
+# push the driver did not make. Pi's job is to change files; landing them is the
+# driver's.
+#
+# It is an allowlist, not `--exclude-tools bash`. Excluding one name does not
+# remove the capability: verified with `--exclude-tools bash`, Pi called its
+# `subagent` tool, and the child process ran bash and printed the string it was
+# asked to print. Only listing what the run may use actually closes the door.
+# `read`, `edit`, `write`, `grep`, `find` and `ls` are what editing a file needs.
+BASE_ARGS = (
+    "pi",
+    "--print",
+    "--no-session",
+    "--approve",
+    "--tools",
+    "read,edit,write,grep,find,ls",
+)
 
 
 class PiError(RuntimeError):

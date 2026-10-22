@@ -37,7 +37,9 @@ from driver_comments import (  # noqa: E402
     ReviewTimeout,
 )
 from driver_cycle import CycleResult, NoReview, run_cycle  # noqa: E402
+from driver_decision import Outcome, decide  # noqa: E402
 from driver_git import GitError, NothingToPush, PushResult  # noqa: E402
+from driver_iteration import MAX_ITERATIONS, IterationLimit  # noqa: E402
 from driver_pi import PiError, PiRun  # noqa: E402
 from driver_pr import GhFailed, NoPullRequest, PullRequest  # noqa: E402
 from parse_contract_comment import ParseError, Review  # noqa: E402
@@ -128,14 +130,14 @@ class Fixture:
 
         return wait
 
-    def run(self, **kwargs):
+    def run(self, iteration=1, **kwargs):
         patchers = [
             mock.patch.object(driver_cycle, name, spy) for name, spy in self.spies.items()
         ]
         for patcher in patchers:
             patcher.start()
         try:
-            return run_cycle(repo="owner/repo", iteration=1, **kwargs)
+            return run_cycle(repo="owner/repo", iteration=iteration, **kwargs)
         finally:
             for patcher in reversed(patchers):
                 patcher.stop()
@@ -243,6 +245,209 @@ class EarlyStopTest(unittest.TestCase):
         self.assertTrue(fixture.called("commit_and_push"))
 
 
+class IterationLimitTest(unittest.TestCase):
+    """T4.1: the cap is enforced on the way in, not admitted afterwards."""
+
+    def test_the_sixth_iteration_is_refused_before_anything_happens(self):
+        """No PR read, no Pi run, no commit, no push, no wait.
+
+        Checking after the work would push a sixth fix and only then report that
+        it should not have run. Every collaborator must be untouched.
+        """
+        fixture = Fixture()
+        with self.assertRaises(IterationLimit):
+            fixture.run(iteration=MAX_ITERATIONS + 1)
+        for name in (
+            "resolve",
+            "list_comments",
+            "run_pi",
+            "commit_and_push",
+            "wait_for_contract_comment",
+        ):
+            with self.subTest(collaborator=name):
+                self.assertFalse(fixture.called(name))
+
+    def test_the_last_allowed_iteration_still_runs_when_it_can_help(self):
+        """T4.2 changed the answer here, and this pins the new one.
+
+        On the fifth attempt the loop still acts if the review says fixing it
+        would help. It is the *sixth* attempt that T4.1 forbids, not the fifth.
+        """
+        fixture = Fixture()
+        result = fixture.run(iteration=MAX_ITERATIONS)
+        self.assertTrue(result.pi_ran)
+        self.assertTrue(fixture.called("commit_and_push"))
+
+    def test_the_last_attempt_is_not_stopped_by_the_limit_on_the_way_in(self):
+        """No HUMAN verdict can be reached before the first review of attempt 5.
+
+        The in-guard count is `iteration - 1`, so at most 4 attempts have been
+        made and the rule cannot report the limit yet. This pins that the fifth
+        attempt is a real attempt rather than a no-op the limit swallows: Pi ran
+        and the verdict came from the review the fifth attempt produced.
+        """
+        result = Fixture().run(iteration=MAX_ITERATIONS)
+        self.assertTrue(result.pi_ran)
+        self.assertEqual(result.decision.iteration, MAX_ITERATIONS)
+
+    def test_the_iteration_label_is_the_one_in_the_log(self):
+        """`iteration N/5` is what an operator sees and what the issue records."""
+        from driver_iteration import describe_iteration  # noqa: PLC0415
+
+        self.assertEqual(describe_iteration(MAX_ITERATIONS), "iteration 5/5")
+
+
+class DecisionTest(unittest.TestCase):
+    """T4.2: the cycle acts on the rule, not on `score == 5`.
+
+    These run the seam, not the rule itself (that lives in
+    `tests/test_driver_decision.py`). What matters here is that the cycle reads
+    the decision and that each of the three outcomes has the effects the design
+    says: success stops silently, continue runs Pi, human stops without a push.
+    """
+
+    def test_a_four_with_only_nits_stops_without_running_pi(self):
+        """The plateau case: 4/5 plus P2 is the loop's success, not a retry."""
+        fixture = Fixture(
+            before_review=Review(
+                score=4,
+                issues=("[P2] a.py:1 — Style: Nit.",),
+                agent_prompt="Fix the nit.",
+            )
+        )
+        result = fixture.run()
+        self.assertFalse(fixture.called("run_pi"))
+        self.assertFalse(fixture.called("commit_and_push"))
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_a_four_with_a_p1_still_runs_pi(self):
+        fixture = Fixture(
+            before_review=Review(
+                score=4,
+                issues=("[P1] a.py:1 — Bug: Real.",),
+                agent_prompt="Fix the bug.",
+            )
+        )
+        result = fixture.run()
+        self.assertTrue(result.pi_ran)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_three_out_of_five_runs_pi(self):
+        fixture = Fixture(
+            before_review=Review(score=3, issues=(), agent_prompt="Do better.")
+        )
+        result = fixture.run()
+        self.assertTrue(result.pi_ran)
+
+    def test_a_failing_review_after_the_fifth_attempt_goes_to_a_human(self):
+        """The fifth attempt runs; it is the *sixth* that the limit forbids.
+
+        So the limit is not felt on the way in at iteration 5. It is felt on the
+        way out, when attempt 5's review is still not good enough: `decide`
+        reports HUMAN and the caller stops there instead of looping again.
+        """
+        fixture = Fixture(
+            before_review=Review(
+                score=3, issues=("[P1] a.py:1 — Bug: Bad.",), agent_prompt="Fix it."
+            ),
+            after_review=Review(
+                score=4, issues=("[P1] a.py:1 — Bug: Still bad.",),
+                agent_prompt="Fix it again.",
+            ),
+        )
+        result = fixture.run(iteration=MAX_ITERATIONS)
+        self.assertTrue(result.pi_ran)
+        self.assertIs(result.decision.outcome, Outcome.HUMAN)
+        self.assertEqual(result.decision.iteration, MAX_ITERATIONS)
+
+    def test_a_fifth_attempt_that_succeeds_does_not_go_to_a_human(self):
+        """The limit must not report failure for a PR that just passed."""
+        fixture = Fixture()
+        result = fixture.run(iteration=MAX_ITERATIONS)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_the_decision_is_taken_on_the_review_after_the_push(self):
+        """Otherwise the loop decides from the review it already fixed."""
+        fixture = Fixture()
+        result = fixture.run()
+        self.assertIsNotNone(result.after)
+        self.assertEqual(result.decision.iteration, 1)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_a_dry_run_reports_the_decision_without_acting(self):
+        fixture = Fixture(
+            before_review=Review(score=4, issues=("[P2] a.py:1 — Style: Nit.",),
+                                 agent_prompt="Fix the nit.")
+        )
+        result = fixture.run(dry_run=True)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+        self.assertFalse(result.pi_ran)
+
+
+class RepeatedIssueTest(unittest.TestCase):
+    """T4.3: the cycle hands the rule both reviews, so a no-op fix is visible.
+
+    The rule itself is tested in `tests/test_driver_decision.py`. What is only
+    testable here is the wiring: that the review read *before* Pi ran is the
+    baseline the new review is compared against. Passing the wrong one (or none)
+    would silently disable detection and the loop would look normal while burning
+    its whole budget.
+    """
+
+    SAME_ISSUE = "[P1] a.py:1 — Bug: loop never times out"
+
+    def fixture(self, after_issue: str) -> Fixture:
+        return Fixture(
+            before_review=Review(
+                score=4, issues=(self.SAME_ISSUE,), agent_prompt="Fix the loop."
+            ),
+            after_review=Review(
+                score=4, issues=(after_issue,), agent_prompt="Fix the loop."
+            ),
+        )
+
+    def test_the_same_issue_after_pi_stops_as_repeated(self):
+        """The real case: Pi ran, pushed, and the reviewer reported it again."""
+        fixture = self.fixture("[P1] a.py:1 — Bug: loop never times out")
+        result = fixture.run(iteration=2)
+        self.assertTrue(result.pi_ran)
+        self.assertIs(result.decision.outcome, Outcome.REPEATED)
+
+    def test_a_shifted_line_number_is_still_the_same_issue(self):
+        """Pi's commit moves lines, which must not look like a new finding."""
+        fixture = self.fixture("[P1] a.py:57 — Bug: loop never times out")
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.REPEATED)
+
+    def test_a_different_issue_after_pi_continues(self):
+        """Progress means the loop keeps its remaining attempts."""
+        fixture = self.fixture("[P1] b.py:2 — Bug: commit message missing")
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.CONTINUE)
+
+    def test_a_clean_review_after_pi_is_success_not_repeated(self):
+        """Success is decided first, so it cannot be masked by detection."""
+        fixture = Fixture(
+            before_review=Review(
+                score=4, issues=(self.SAME_ISSUE,), agent_prompt="Fix the loop."
+            ),
+            after_review=Review(score=5, issues=(), agent_prompt="No issues found."),
+        )
+        result = fixture.run(iteration=2)
+        self.assertIs(result.decision.outcome, Outcome.SUCCESS)
+
+    def test_the_first_decision_of_a_cycle_is_never_a_repeat(self):
+        """Nothing has been attempted when `before` is read, so nothing is a no-op.
+
+        The entry-side `decide` call gets no `previous`. If it did, a review that
+        repeats the previous cycle's findings would stop the loop before Pi ever
+        ran, which is the opposite of what detection is for.
+        """
+        fixture = self.fixture("[P1] a.py:1 — Bug: loop never times out")
+        result = fixture.run(iteration=3, dry_run=True)
+        self.assertIs(result.decision.outcome, Outcome.CONTINUE)
+
+
 class DryRunTest(unittest.TestCase):
     def test_dry_run_reads_and_parses_but_changes_nothing(self):
         fixture = Fixture()
@@ -285,7 +490,12 @@ class CliTest(unittest.TestCase):
                     self.assertEqual(driver_cycle.main(["--pr", "31"]), 2)
 
     def test_exit_1_when_the_environment_fails(self):
-        for error in (GhFailed("gh down"), PiError("pi down"), GitError("git down")):
+        for error in (
+            GhFailed("gh down"),
+            PiError("pi down"),
+            GitError("git down"),
+            IterationLimit("iteration 6 is past the hard limit of 5"),
+        ):
             with self.subTest(error=type(error).__name__):
                 with mock.patch.object(driver_cycle, "run_cycle", side_effect=error):
                     self.assertEqual(driver_cycle.main(["--pr", "31"]), 1)
@@ -293,6 +503,65 @@ class CliTest(unittest.TestCase):
     def test_exit_3_when_the_contract_is_broken(self):
         with mock.patch.object(driver_cycle, "run_cycle", side_effect=ParseError("bad")):
             self.assertEqual(driver_cycle.main(["--pr", "31"]), 3)
+
+    def status_output(self, result) -> str:
+        """What `main` printed, as one string."""
+        with mock.patch.object(driver_cycle, "run_cycle", return_value=result), \
+             mock.patch.object(driver_cycle.driver_log, "log") as logged:
+            code = driver_cycle.main(["--pr", "31"])
+        text = "\n".join(str(call.args[0]) for call in logged.call_args_list)
+        return text, code
+
+    def test_a_finished_cycle_prints_the_status(self):
+        """T4.4: the last thing printed is what the operator acts on."""
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=AFTER_REVIEW,
+                pi_ok=True, pushed=True, pi_ran=True,
+                decision=decide(AFTER_REVIEW, iteration=1, pr=PR.number),
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("READY FOR MERGE", text)
+        self.assertIn(PR.url, text)
+
+    def test_a_human_stop_prints_the_status(self):
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=BEFORE_REVIEW,
+                pi_ok=True, pushed=False, pi_ran=False,
+                decision=decide(BEFORE_REVIEW, iteration=MAX_ITERATIONS, pr=PR.number),
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("HUMAN REVIEW NEEDED", text)
+        self.assertIn(PR.url, text)
+        self.assertNotIn("READY FOR MERGE", text)
+
+    def test_the_status_is_printed_after_the_delta(self):
+        """A reader scrolling to the bottom must land on the verdict."""
+        text, _ = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=AFTER_REVIEW,
+                pi_ok=True, pushed=True, pi_ran=True,
+                decision=decide(AFTER_REVIEW, iteration=1, pr=PR.number),
+            )
+        )
+        self.assertGreater(
+            text.index("READY FOR MERGE"), text.index("on " + PR.url)
+        )
+
+    def test_a_cycle_without_a_decision_still_prints_the_delta(self):
+        """Refusing to invent a verdict is better than printing a wrong one."""
+        text, code = self.status_output(
+            CycleResult(
+                pr=PR, before=BEFORE_REVIEW, after=None,
+                pi_ok=False, pushed=False, pi_ran=False,
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("READY FOR MERGE", text)
+        self.assertIn("dry run", text)
 
     def test_dry_run_is_passed_through(self):
         with mock.patch.object(

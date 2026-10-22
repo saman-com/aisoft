@@ -47,11 +47,113 @@ BULLET = re.compile(r"^\s*[-*]\s+(?P<text>.+?)\s*$")
 # The single word that means "no issues", per CONTRACT.md.
 NO_ISSUES = {"none", "no issues", "no issues found", "n/a"}
 
+# An optional `[P0]` / `[P1]` / `[P2]` tag at the start of an issue bullet. The
+# tag is written by the reviewer, so it is read case-insensitively.
+SEVERITY_TAG = re.compile(r"^\s*\[(?P<tag>[^\]]{1,16})\]\s*")
+
+# The only severities whose presence is decided. Everything else, including a
+# bullet with no tag at all, is treated as blocking. Guessing that an
+# unrecognised tag means "cosmetic" is how a real bug ships.
+BLOCKING_SEVERITIES = frozenset({"P0", "P1"})
+NON_BLOCKING_SEVERITIES = frozenset({"P2"})
+
+# What is dropped from a fingerprint's description: punctuation, spacing and
+# case, which vary without carrying meaning.
+FINGERPRINT_SEPARATORS = re.compile(r"[^\w]+", re.UNICODE)
+
+# What is collapsed on a location: whitespace only. A path's own `_`, `-`, `/`
+# and `.` are kept, because folding them would let `a.py` collide with `a/py`.
+FINGERPRINT_SPACE = re.compile(r"\s+")
+
+# The dash between the location and the rest of a bullet, per CONTRACT.md. All
+# three dash characters appear in practice, so any of them separates the two.
+LOCATION_SEPARATOR = re.compile(r"\s+[—–-]\s+", re.UNICODE)
+
+# The line or line range on a location (`a.py:1`, `a.py:1-2`). Dropped from a
+# fingerprint because Pi's edits move lines: the same unfixed finding is reported
+# at a new line number on the next pass.
+LOCATION_LINES = re.compile(r":\d+(?:-\d+)?$")
+
 FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 
 
 class ParseError(ValueError):
     """The comment does not satisfy the contract."""
+
+
+def severity_of(issue: str) -> str | None:
+    """The `P`-tag on an issue bullet, upper-cased, or None when there is none.
+
+    Returns whatever tag was written, which is not the same as "a severity this
+    module understands". `[P3]` and `[HIGH]` come back as `"P3"` and `"HIGH"`;
+    `is_blocking` is what decides how to read them.
+    """
+    match = SEVERITY_TAG.match(issue)
+    return match.group("tag").strip().upper() if match else None
+
+
+def is_blocking(issue: str) -> bool:
+    """True unless the bullet is explicitly tagged as cosmetic.
+
+    Only `[P2]` is non-blocking. A missing tag and an unknown tag both block:
+    the reviewer failing to say how bad a finding is does not make it safe, and
+    an unrecognised tag is more likely a format change than a downgrade.
+    """
+    return severity_of(issue) not in NON_BLOCKING_SEVERITIES
+
+
+def issue_fingerprint(issue: str) -> str:
+    """A stable comparison key for one bullet, for spotting a repeated finding.
+
+    Used to answer "is this the same problem as last time", so it has to survive
+    the differences a re-review produces and ignore the ones that are noise:
+
+    - The severity tag is dropped: a finding that is still there may be reported
+      as `[P1]` on one pass and `[P0]` on the next, and it is the same problem.
+    - The line numbers are dropped, keeping the file. Pi's commit moves lines, so
+      `a.py:1` becoming `a.py:9` is the same unfixed finding, not a new one.
+    - The header (`<header>: `) is dropped. The reviewer rewords it freely and
+      the description is the part that says what is wrong.
+    - Case, punctuation and spacing are folded, so `A.PY:1 — Wrong: X.` and
+      `a.py — wrong: x` compare equal.
+
+    Deliberately not fuzzy: no edit distance, no synonym matching. A false
+    "repeated" verdict stops a loop that was making progress, which is worse
+    than the extra iterations it saves, so a description the reviewer rephrased
+    beyond recognition simply fails to match.
+    """
+    text = SEVERITY_TAG.sub("", issue, count=1).strip()
+
+    # `<location> — <header>: <description>`. The header is optional and the
+    # description may contain its own colons and dashes, so both splits take
+    # only the first separator.
+    parts = LOCATION_SEPARATOR.split(text, maxsplit=1)
+    if len(parts) == 2:
+        location, rest = parts
+    else:
+        # No dash: the whole bullet is the finding. Falling back to the whole
+        # text is safer than treating the first token as a path.
+        location, rest = "", text
+
+    location = LOCATION_LINES.sub("", location)
+    _, colon, description = rest.partition(": ")
+    body = description if colon else rest
+
+    # The location keeps its punctuation and only loses whitespace; the
+    # description loses punctuation too. Folding a path's `.` and `/` would let
+    # `a.py` and `a/py` compare equal.
+    path = FINGERPRINT_SPACE.sub("", location.lower())
+    words = FINGERPRINT_SEPARATORS.sub(" ", body.lower()).strip()
+    return " ".join(part for part in (path, " ".join(words.split())) if part)
+
+
+# A score that needs no further work on its own, regardless of the issues listed.
+SUCCESS_SCORE = 5
+
+# The score at which a review with nothing blocking counts as done. The reviewer
+# plateaus here while listing low-confidence findings, so treating 4/5 as "keep
+# going" means paying Pi to chase findings the reviewer itself rated as minor.
+SUFFICIENT_SCORE = 4
 
 
 @dataclass(frozen=True)
@@ -61,8 +163,37 @@ class Review:
     agent_prompt: str
 
     @property
+    def blocking_issues(self) -> tuple[str, ...]:
+        """The issues the loop must still fix before a human merges."""
+        return tuple(issue for issue in self.issues if is_blocking(issue))
+
+    @property
+    def blocking_count(self) -> int:
+        return len(self.blocking_issues)
+
+    @property
+    def blocking_fingerprint(self) -> tuple[str, ...]:
+        """The blocking findings reduced to comparison keys, sorted.
+
+        Sorted and deduplicated so a re-review that reports the same findings in
+        a different order, or lists one twice, still compares equal. Empty when
+        nothing blocks, which is why a clean review can never look "repeated".
+        """
+        return tuple(sorted({issue_fingerprint(i) for i in self.blocking_issues}))
+
+    @property
     def is_clean(self) -> bool:
-        return self.score == 5 and not self.issues
+        """True when the review needs no further work, per docs/TASKS.md T4.2.
+
+            success <=> score == 5 or (score >= 4 and no P0/P1 issue)
+
+        This is the loop's real exit. `score == 5` alone is not it: the reviewer
+        settles at 4/5 while reporting only nits, and stopping there would mean
+        the loop could never finish on those PRs.
+        """
+        if self.score >= SUCCESS_SCORE:
+            return True
+        return self.score >= SUFFICIENT_SCORE and not self.blocking_issues
 
 
 def _split_sections(body: str) -> dict[str, str]:

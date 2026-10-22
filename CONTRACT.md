@@ -64,6 +64,34 @@ An issue bullet is `- <location> — <issue header>: <one-sentence description>`
 where the location is `file`, `file:line`, or `file:start-end`. A finding with
 no usable line number falls back to the bare path.
 
+#### Severity tags (optional, parser-tolerant)
+
+A bullet may start with a `[P0]`, `[P1]` or `[P2]` tag:
+
+```markdown
+- [P0] driver.py:42 — Poll loop: The loop never times out.
+```
+
+The loop reads it to decide whether a 4/5 stops or continues (see "Stopping
+rule" below). The tag is optional and is read case-insensitively. `[P0]` and
+`[P1]` block; `[P2]` does not. **Anything else blocks**: an untagged bullet, an
+undefined tag such as `[P3]`, and a tag at the front that is not one of the three
+all count as blocking, because a missing or unrecognised severity is not evidence
+that the finding is safe.
+
+**The renderer does not currently emit these tags.** PR-Agent's review schema has
+no severity field, so `scripts/render_contract_comment.py` writes every bullet
+untagged and in practice every finding blocks. The parser accepts the tag so the
+rule is in place when the comment gains a severity; adding one is the change that
+also touches `.pr_agent.toml` and the renderer, per the note at the top.
+
+### Stopping rule
+
+The loop stops when `score == 5`, or when `score >= 4` and no bullet blocks. A
+lower score never stops the loop, even with an empty Issues section: the reviewer
+said the code is not good enough without naming a finding, and that alone is
+reason to keep going. `scripts/driver_decision.py` owns this, not the caller.
+
 ### Score scale
 
 The model scores a PR from 0 to 100, which is PR-Agent's schema. The renderer

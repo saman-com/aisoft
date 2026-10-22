@@ -22,7 +22,8 @@ Build a reliable, semi-autonomous workflow where:
    - Extracts a Confidence Score (0–5)
    - Extracts the list of issues and a ready-to-use Agent Prompt
    - If score < 5 → uses the Agent Prompt to fix the issues, pushes, and repeats
-5. The loop stops when the score reaches **5/5** or after a maximum of **5 iterations**.
+5. The loop stops when the review is good enough (**5/5**, or **4/5** with no P0/P1
+   issue) or after a maximum of **5 iterations**.
 6. A human performs the final merge.
 
 The system prioritizes:
@@ -114,7 +115,10 @@ Contains:
    - Agent Prompt section
 4. Decision logic:
    - Score == 5 → stop and notify human
-   - Score < 5 and iterations < 5 → feed Agent Prompt to Pi → commit & push → repeat
+   - Score >= 4 with no P0/P1 issue → stop and notify human (the reviewer
+     plateaus at 4/5 while listing findings it rates as minor; see PR #27)
+   - Otherwise, iterations < 5 → feed Agent Prompt to Pi → commit & push → repeat
+   - Otherwise → stop and notify human that the limit was reached
 5. Enforce max 5 iterations
 6. Provide clear terminal feedback at every step
 
@@ -153,11 +157,11 @@ while iteration < 5:
        - Extract "## Issues"
        - Extract "## Agent Prompt"
 
-    3. if score == 5:
-          print("✅ Score 5/5 – ready for human merge")
+    3. if score == 5, or score >= 4 with no blocking issue:
+          print("✅ ready for human merge")
           exit success
 
-    4. if score < 5:
+    4. otherwise, if iterations remain:
           print(f"Score {score}/5 – fixing issues (iteration {iteration+1}/5)")
           Feed the full "Agent Prompt" to Pi
           Pi edits files
@@ -173,7 +177,8 @@ while iteration < 5:
 
 ### Phase C – Human Merge
 
-- When score reaches 5/5 (or max iterations reached), the driver stops.
+- When the review is good enough (5/5, or 4/5 with nothing blocking) or max
+  iterations are reached, the driver stops.
 - Human reviews the final state and merges the PR.
 
 ---
@@ -283,7 +288,8 @@ The driver (bash or Python) must:
 - Exit cleanly with clear status messages
 
 Optional enhancements:
-- Detect repeated identical issues (stop early)
+- Detect repeated identical issues (stop early) — implemented as `Outcome.REPEATED`
+  (T4.3, see `docs/TASKS.md` for the rule and its guards)
 - Support dry-run mode
 - Log full conversation history
 - Notify via desktop notification or Slack when score reaches 5
@@ -313,7 +319,8 @@ The system is considered successful when:
 2. PR-Agent consistently produces the three required sections.
 3. The local driver can parse the score and Agent Prompt reliably.
 4. The fix → push → re-review cycle works for at least 2–3 iterations.
-5. When the score reaches 5/5, the driver stops and clearly notifies the user.
+5. When the review is good enough (5/5, or 4/5 with no P0/P1 issue), the driver
+   stops and clearly notifies the user.
 6. The entire loop can be observed and debugged from the terminal.
 
 ---
