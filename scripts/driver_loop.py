@@ -264,9 +264,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         # Said before the status, not after: the verdict is the line a reader
-        # stops on, and appending a note below it would bury it. A dry run always
-        # stops on "another attempt is due", because nothing was fixed, so this
-        # says plainly that no attempt ran.
+        # stops on, and appending a note below it would bury it.
+        #
+        # It is printed whatever the verdict, because both cases need it and it is
+        # true in both. On a PR that is not clean the run stops on `CONTINUE` and
+        # the status says `NOT FINISHED`, which on its own reads like a run that
+        # stopped one attempt short instead of one that never tried. On a clean PR
+        # the status says `READY FOR MERGE`, and this line is what tells the reader
+        # the PR was already clean rather than newly fixed.
         driver_log.log("dry run: nothing was changed and no attempt was made.")
     announce(loop)
     return 0
