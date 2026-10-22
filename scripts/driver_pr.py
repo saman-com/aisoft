@@ -56,6 +56,16 @@ class GhFailed(DriverError):
     """`gh` could not be run, or its answer could not be understood."""
 
 
+class CreateFailed(GhFailed):
+    """`gh pr create` itself failed, as opposed to a lookup that went wrong.
+
+    A subclass so a caller can act on the difference without matching on the
+    message: a failed create can mean another run opened the PR first, while a
+    failed lookup after a create means the PR exists and its number is unknown.
+    Callers that only care that `gh` failed still catch `GhFailed`.
+    """
+
+
 class NoPullRequest(DriverError):
     """The branch has no open pull request."""
 
@@ -326,7 +336,9 @@ def ensure_pull_request(
     that both saw no open PR both reach `gh pr create`, and the second one makes a
     duplicate. That cannot be prevented here, but it can be reported instead of
     handed back as "your PR", which is what would let a loop fix one of two PRs
-    while the review comments went to the other.
+    while the review comments went to the other. The same goes for a create that
+    *failed* while another run's PR appeared in between: that is a duplicate too,
+    and gh's own message alone would read as "there is no PR here".
     """
     if branch in DEFAULT_BRANCHES:
         raise GhFailed(
@@ -345,7 +357,28 @@ def ensure_pull_request(
     # branch whose last PR merged and then grew new commits is the normal second
     # round. gh refuses the create itself when nothing is new, and its message is
     # passed through, which is more accurate than a rule here guessing.
-    created = _open(branch=branch, base=base, title=title, body=body, commits=commits)
+    try:
+        created = _open(branch=branch, base=base, title=title, body=body, commits=commits)
+    except CreateFailed as error:
+        # A failed create is not the same answer as "there is no PR". Another run
+        # can have opened one between the lookup above and this create - gh then
+        # refuses the second one - and gh's message on its own reads as "nothing to
+        # work on" when the branch does have a PR, just not this run's.
+        try:
+            duplicates = [pr for pr in list_pull_requests(branch) if pr.state == "OPEN"]
+        except GhFailed:
+            # The create error is the one that explains what happened; a failed
+            # lookup here would replace it with a less useful message.
+            duplicates = []
+        if not duplicates:
+            raise
+        numbers = ", ".join(f"#{pr.number}" for pr in duplicates)
+        raise GhFailed(
+            f"gh pr create failed for {branch!r}, but {numbers} is open for that "
+            "branch: another run created the pull request between this call's "
+            f"lookup and its create. Run again to reuse it, or close it first. "
+            f"gh said: {error}"
+        ) from error
 
     # Look once more, because the lookup above and the create were two separate
     # moments: another run can have opened the same PR in between. Two open PRs
@@ -358,6 +391,17 @@ def ensure_pull_request(
             "run created one between this call's lookup and its create. Close all "
             "but one before running again, or the review and the loop will not "
             "agree about which PR they are working on."
+        )
+    # One open PR is this call's only when it is the one gh reported creating. A
+    # different number means the branch's open PR belongs to another run, and
+    # returning `created` would hand back a PR this loop would then push fixes for
+    # while the review read the other one.
+    if open_now and open_now[0].number != created.number:
+        raise GhFailed(
+            f"this call created #{created.number} for {branch!r}, but the branch's "
+            f"open pull request is #{open_now[0].number}. Another run opened one at "
+            "the same time, so there is no single PR this run can say it created. "
+            "Check the branch on GitHub before running again."
         )
     return created, True
 
@@ -397,7 +441,7 @@ def _open(
         # the branches, no permission). Passing it through unchanged is what makes
         # the failure actionable; a returned guess would hide it.
         detail = (result.stderr or result.stdout).strip()
-        raise GhFailed(
+        raise CreateFailed(
             f"gh pr create failed for {branch!r} into {base!r}: "
             f"{detail or result.returncode}"
         )
