@@ -29,6 +29,14 @@ Three things are worth stating because they are easy to get wrong:
 - **A dry run runs once.** Nothing changes, so a second pass would read the same
   review and print the same thing.
 
+With `--create` the loop also starts the run: it ensures the branch has a pull
+request (opening one only when none is open), waits for the first contract review,
+and then runs the cycles against that PR. Without it nothing is looked up and the
+first cycle must find its own PR and review, which is what Slice 4 did.
+
+`--create` and `--dry-run` are refused together. A dry run promises to change
+nothing, and opening a pull request is a change.
+
 Exit codes follow the rest of the driver: 0 the loop ran to a verdict (whatever
 the verdict was), 1 the environment or the loop failed, 2 there was nothing to
 do, 3 the review did not satisfy the contract.
@@ -42,6 +50,7 @@ the code only says the run itself completed.
 
 Usage:
 
+    python3 scripts/driver_loop.py --create        # no PR yet: create, then loop
     python3 scripts/driver_loop.py --dry-run
     python3 scripts/driver_loop.py --pr 31 --repo owner/name
     python3 scripts/driver_loop.py --iteration 3   # resume a half-run loop
@@ -58,14 +67,21 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import driver_log
-from driver_comments import DEFAULT_INTERVAL, DEFAULT_TIMEOUT, DriverError, ReviewTimeout
+from driver_comments import (
+    DEFAULT_INTERVAL,
+    DEFAULT_TIMEOUT,
+    WORKFLOW_AUTHOR,
+    DriverError,
+    ReviewTimeout,
+    wait_for_contract_comment,
+)
 from driver_cycle import CycleResult, NoReview, repository, run_cycle, summarize
 from driver_decision import Decision, Outcome
-from driver_git import GitError, NothingToPush
+from driver_git import GitError, NothingToPush, commits_on_branch, current_branch
 from driver_iteration import MAX_ITERATIONS, IterationLimit, check_iteration, describe_iteration
 from driver_pi import DEFAULT_TIMEOUT as PI_DEFAULT_TIMEOUT
 from driver_pi import PiError
-from driver_pr import GhFailed, NoPullRequest, PullRequest
+from driver_pr import GhFailed, NoPullRequest, PullRequest, ensure_pull_request
 from driver_status import Status, report
 from parse_contract_comment import ParseError
 
@@ -116,12 +132,85 @@ class LoopResult:
         return shown
 
 
+def start(
+    *,
+    repo: str,
+    branch: str,
+    pr: int | None = None,
+    base: str = "master",
+    timeout: float = DEFAULT_TIMEOUT,
+    interval: float = DEFAULT_INTERVAL,
+    author: str = WORKFLOW_AUTHOR,
+    quiet: bool = False,
+) -> PullRequest:
+    """Get the branch a PR, and wait for its first review. Return the PR.
+
+    This is the step Slice 4 did not have: a run that starts from a branch with
+    commits and no pull request. Two things happen, in this order, and the order
+    is the whole point:
+
+    - **Ensure the PR.** `driver_pr.ensure_pull_request` is the only place a PR is
+      opened, so a branch that already has one is reused by the same call and
+      there is no second create path to keep in step with the first.
+    - **Wait for the first review.** `run_cycle` raises `NoReview` when the PR has
+      no contract comment, and a PR opened a second ago never does: the workflow
+      has not run yet. Waiting here is what lets the first cycle read a review
+      instead of failing on a fresh PR.
+
+    The wait needs no baseline. A PR that was just created has no contract comment
+    at all, so the first one that appears is the review of the first push, whatever
+    its id. A reused PR already has one, and waiting for it returns at once rather
+    than spending the timeout.
+
+    A caller-supplied `pr` must match what the branch actually has. The cycle
+    commits to the checked-out branch, so acting on a different PR would push a fix
+    for one review onto another.
+    """
+    commits = commits_on_branch(branch, base=base)
+    pull_request, created = ensure_pull_request(
+        branch=branch, base=base, commits=commits
+    )
+    if pr is not None and pull_request.number != pr:
+        raise LoopError(
+            f"PR #{pr} is not the open pull request for {branch!r} "
+            f"(that branch has #{pull_request.number}). The loop commits to the "
+            "checked-out branch, so it can only act on the PR for that branch."
+        )
+    if not quiet:
+        # `created` is reported and nothing else depends on it: the loop acts on
+        # the PR, and who opened it does not change what happens next.
+        verb = "created" if created else "reused"
+        count = len(commits)
+        noun = "commit" if count == 1 else "commits"
+        driver_log.log(
+            f"{verb} PR #{pull_request.number} for {branch!r} into {base!r} "
+            f"({count} {noun}): {pull_request.url}"
+        )
+        driver_log.log(
+            f"waiting up to {timeout:.0f}s for the first review "
+            f"(polling every {interval:.0f}s)"
+        )
+
+    wait_for_contract_comment(
+        repo,
+        pull_request.number,
+        timeout=timeout,
+        interval=interval,
+        author=author,
+    )
+    if not quiet:
+        driver_log.log(f"the first review on #{pull_request.number} is in; starting the loop")
+    return pull_request
+
+
 def run_loop(
     *,
     repo: str,
     start_iteration: int = 1,
     branch: str | None = None,
     pr: int | None = None,
+    create: bool = False,
+    base: str = "master",
     dry_run: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
     interval: float = DEFAULT_INTERVAL,
@@ -139,9 +228,40 @@ def run_loop(
     The default is resolved here rather than in the signature. A `= run_cycle`
     default would be bound when this module is imported, so replacing
     `driver_loop.run_cycle` to test the seam would silently have no effect.
+
+    `create=True` runs `start` first: ensure the PR, wait for the first review, and
+    then loop against that PR. It is refused with `dry_run`, which promises to
+    change nothing, and opening a PR is a change.
     """
     perform = cycle if cycle is not None else run_cycle
     check_iteration(start_iteration)
+    if create and dry_run:
+        raise LoopError(
+            "--create cannot be combined with --dry-run: a dry run changes nothing, "
+            "and opening a pull request is a change. Run --create on its own, or "
+            "--dry-run on the PR that already exists."
+        )
+
+    if create:
+        # The branch is resolved once, here, and handed to every cycle below: the
+        # PR was ensured for this branch, and a cycle that resolved a different one
+        # would push the fix somewhere the review is not.
+        branch = branch or current_branch()
+        pull_request = start(
+            repo=repo,
+            branch=branch,
+            pr=pr,
+            base=base,
+            timeout=timeout,
+            interval=interval,
+            author=author or WORKFLOW_AUTHOR,
+            quiet=quiet,
+        )
+        # The number comes from the PR that was ensured, not from the caller, so
+        # every cycle below acts on the PR this run actually started against. A
+        # mismatch between an explicit `pr` and the branch was refused in `start`.
+        pr = pull_request.number
+
     if not quiet:
         driver_log.log(
             f"loop: starting at {describe_iteration(start_iteration)}, "
@@ -230,6 +350,14 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="first attempt of this run, 1..5; a value outside that range is refused",
     )
+    parser.add_argument(
+        "--create",
+        action="store_true",
+        help="ensure the branch has a PR (create only if none is open), wait for its first review, then loop",
+    )
+    parser.add_argument(
+        "--base", default="master", help="the branch the PR is opened against"
+    )
     parser.add_argument("--dry-run", action="store_true", help="read and parse, change nothing")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
@@ -242,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
             start_iteration=args.iteration,
             branch=args.branch,
             pr=args.pr,
+            create=args.create,
+            base=args.base,
             dry_run=args.dry_run,
             timeout=args.timeout,
             interval=args.interval,
